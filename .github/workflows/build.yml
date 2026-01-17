@@ -1,0 +1,222 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build \
+            qt6-base-dev \
+            libfftw3-dev \
+            libsqlite3-dev \
+            vapoursynth-dev
+
+      - name: Build
+        run: |
+          meson setup build --buildtype=release
+          meson compile -C build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsanalog-linux-x64
+          path: build/vsanalog.so
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build \
+            qt6-base-dev \
+            libfftw3-dev \
+            libsqlite3-dev \
+            vapoursynth-dev
+
+      - name: Build
+        run: |
+          meson setup build --buildtype=release
+          meson compile -C build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsanalog-linux-arm64
+          path: build/vsanalog.so
+
+  build-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          brew install meson qt6 fftw sqlite vapoursynth
+
+      - name: Build
+        run: |
+          meson setup build --buildtype=release
+          meson compile -C build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsanalog-macos-arm64
+          path: build/vsanalog.dylib
+
+  build-macos-x64:
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          brew install meson qt6 fftw sqlite vapoursynth
+
+      - name: Build
+        run: |
+          meson setup build --buildtype=release
+          meson compile -C build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsanalog-macos-x64
+          path: build/vsanalog.dylib
+
+  build-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Meson and Ninja
+        run: pip install meson ninja
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          arch: win64_msvc2019_64
+          cache: true
+
+      - name: Install pkg-config
+        run: choco install pkgconfiglite
+
+      - name: Install vcpkg dependencies
+        run: |
+          vcpkg integrate install
+          vcpkg install fftw3:x64-windows sqlite3:x64-windows
+
+      - name: Download VapourSynth SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/vapoursynth/vapoursynth/releases/download/R70/VapourSynth64-Portable-R70.zip" -OutFile vs.zip
+          Expand-Archive vs.zip -DestinationPath vs_sdk
+
+      - name: Create pkg-config files
+        shell: pwsh
+        run: |
+          $pkgConfigDir = "pkgconfig"
+          New-Item -ItemType Directory -Force -Path $pkgConfigDir
+
+          # VapourSynth
+          $vsContent = @"
+          prefix=${{ github.workspace }}/vs_sdk
+          includedir=`${prefix}/sdk/include/vapoursynth
+          libdir=`${prefix}
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 70
+          Cflags: -I`${includedir}
+          "@
+          $vsContent | Out-File -FilePath "$pkgConfigDir/vapoursynth.pc" -Encoding ASCII -NoNewline
+
+          # FFTW3
+          $fftwContent = @"
+          prefix=C:/vcpkg/installed/x64-windows
+          exec_prefix=`${prefix}
+          libdir=`${prefix}/lib
+          includedir=`${prefix}/include
+
+          Name: fftw3
+          Description: FFTW3
+          Version: 3.3.10
+          Libs: -L`${libdir} -lfftw3
+          Cflags: -I`${includedir}
+          "@
+          $fftwContent | Out-File -FilePath "$pkgConfigDir/fftw3.pc" -Encoding ASCII -NoNewline
+
+          # SQLite3
+          $sqliteContent = @"
+          prefix=C:/vcpkg/installed/x64-windows
+          exec_prefix=`${prefix}
+          libdir=`${prefix}/lib
+          includedir=`${prefix}/include
+
+          Name: sqlite3
+          Description: SQLite3
+          Version: 3.45.0
+          Libs: -L`${libdir} -lsqlite3
+          Cflags: -I`${includedir}
+          "@
+          $sqliteContent | Out-File -FilePath "$pkgConfigDir/sqlite3.pc" -Encoding ASCII -NoNewline
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+          $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
+
+          meson setup build --buildtype=release `
+            --pkg-config-path="$env:PKG_CONFIG_PATH" `
+            -Dcmake_prefix_path="${{ env.QT_ROOT_DIR }}"
+
+          meson compile -C build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsanalog-windows-x64
+          path: build/vsanalog.dll

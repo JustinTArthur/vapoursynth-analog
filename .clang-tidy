@@ -1,0 +1,27 @@
+# .clang-tidy configuration for vapoursynth-analog
+#
+# Run with: clang-tidy src/*.cpp -- -std=c++20 -I src -I extern/ld-decode/...
+# Or use IDE integration (CLion, VS Code with clangd, etc.)
+
+Checks: >
+  -*,
+  bugprone-*,
+  misc-include-cleaner,
+  misc-unused-using-decls,
+  modernize-use-auto,
+  performance-*,
+  readability-redundant-*
+
+# Treat warnings as errors for CI
+WarningsAsErrors: ''
+
+CheckOptions:
+  # Prefer auto for cast expressions
+  - key: modernize-use-auto.MinTypeNameLength
+    value: 5
+
+# Header filter - only check our source files, not ld-decode
+HeaderFilterRegex: 'src/.*'
+
+# Don't check system headers or external dependencies
+SystemHeaders: false

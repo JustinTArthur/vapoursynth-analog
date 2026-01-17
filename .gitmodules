@@ -1,0 +1,3 @@
+[submodule "extern/ld-decode"]
+	path = extern/ld-decode
+	url = https://github.com/happycube/ld-decode.git
