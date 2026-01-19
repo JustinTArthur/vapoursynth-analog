@@ -21,10 +21,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             meson ninja-build \
-            qt6-base-dev \
             libfftw3-dev \
             libsqlite3-dev \
             libzimg-dev
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.2.4'
+          arch: gcc_64
+          cache: true
 
       - name: Install VapourSynth
         run: |
@@ -39,7 +45,8 @@ jobs:
 
       - name: Build
         run: |
-          meson setup build --buildtype=release
+          meson setup build --buildtype=release \
+            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
       - name: Upload artifact
@@ -61,10 +68,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             meson ninja-build \
-            qt6-base-dev \
             libfftw3-dev \
             libsqlite3-dev \
             libzimg-dev
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          arch: linux_gcc_arm64
+          cache: true
 
       - name: Install VapourSynth
         run: |
@@ -79,7 +92,8 @@ jobs:
 
       - name: Build
         run: |
-          meson setup build --buildtype=release
+          meson setup build --buildtype=release \
+            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
       - name: Upload artifact
@@ -98,11 +112,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install meson qt6 fftw sqlite vapoursynth
+          brew install meson fftw sqlite vapoursynth
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.2.4'
+          arch: clang_64
+          cache: true
 
       - name: Build
         run: |
-          meson setup build --buildtype=release
+          meson setup build --buildtype=release \
+            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
       - name: Upload artifact
@@ -121,11 +143,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install meson qt6 fftw sqlite vapoursynth
+          brew install meson fftw sqlite vapoursynth
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.2.4'
+          arch: clang_64
+          cache: true
 
       - name: Build
         run: |
-          meson setup build --buildtype=release
+          meson setup build --buildtype=release \
+            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
       - name: Upload artifact
@@ -158,12 +188,12 @@ jobs:
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.7.*'
+          version: '6.2.4'
           arch: win64_msvc2019_64
           cache: true
 
       - name: Install pkg-config
-        run: choco install pkgconfiglite
+        run: choco install pkgconfiglite --allow-empty-checksums
 
       - name: Install vcpkg dependencies
         run: |

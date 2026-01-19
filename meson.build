@@ -17,7 +17,7 @@ vapoursynth_dep = dependency('vapoursynth', version: '>=55')
 # Qt6 Core (required by ld-decode)
 # Note: We use sqlite3 C API directly instead of Qt SQL to avoid symbol conflicts with PyQt
 qt6 = import('qt6')
-qt6_dep = dependency('qt6', modules: ['Core'], required: true)
+qt6_dep = dependency('qt6', modules: ['Core'], required: true, method: 'config-tool')
 
 # FFTW3 (required by ld-decode chroma decoders)
 fftw3_dep = dependency('fftw3', required: true)
@@ -73,6 +73,7 @@ lddecode_library_moc = qt6.compile_moc(
     ),
     include_directories: lddecode_library_inc,
     dependencies: qt6_dep,
+    method: 'config-tool'
 )
 
 # Get git info for ld-decode version macros
@@ -165,6 +166,7 @@ lddecode_chroma_moc = qt6.compile_moc(
     ),
     include_directories: [lddecode_chroma_inc, lddecode_library_inc],
     dependencies: [qt6_dep, lddecode_library_dep],
+    method: 'config-tool'
 )
 
 lddecode_chroma = static_library(
@@ -196,15 +198,6 @@ vsanalog_sources = files(
 
 vsanalog_inc = include_directories('src')
 
-# On macOS, we need to ensure our Qt libraries are loaded instead of PyQt's bundled Qt
-# when running in environments like vspreview. Use RPATH to prioritize Homebrew's Qt.
-if host_machine.system() == 'darwin'
-    qt6_libdir = qt6_dep.get_variable(pkgconfig: 'libdir')
-    vsanalog_link_args = ['-Wl,-rpath,' + qt6_libdir]
-else
-    vsanalog_link_args = []
-endif
-
 shared_library(
     'vsanalog',
     vsanalog_sources,
@@ -223,5 +216,4 @@ shared_library(
     install_dir: vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth',
     name_prefix: '',  # Don't add 'lib' prefix on Unix
     cpp_args: ['-D_USE_MATH_DEFINES'],
-    link_args: vsanalog_link_args,
 )
