@@ -24,7 +24,18 @@ jobs:
             qt6-base-dev \
             libfftw3-dev \
             libsqlite3-dev \
-            vapoursynth-dev
+            libzimg-dev
+
+      - name: Install VapourSynth
+        run: |
+          git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
+          pushd vapoursynth
+          ./autogen.sh
+          ./configure --prefix=/usr --disable-x86-asm --disable-vsscript --disable-vspipe --disable-python-module
+          make -j$(nproc)
+          sudo make install -j$(nproc)
+          popd
+          rm -rf vapoursynth
 
       - name: Build
         run: |
@@ -53,7 +64,18 @@ jobs:
             qt6-base-dev \
             libfftw3-dev \
             libsqlite3-dev \
-            vapoursynth-dev
+            libzimg-dev
+
+      - name: Install VapourSynth
+        run: |
+          git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
+          pushd vapoursynth
+          ./autogen.sh
+          ./configure --prefix=/usr --disable-x86-asm --disable-vsscript --disable-vspipe --disable-python-module
+          make -j$(nproc)
+          sudo make install -j$(nproc)
+          popd
+          rm -rf vapoursynth
 
       - name: Build
         run: |
@@ -90,7 +112,7 @@ jobs:
           path: build/vsanalog.dylib
 
   build-macos-x64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -160,9 +182,12 @@ jobs:
           $pkgConfigDir = "pkgconfig"
           New-Item -ItemType Directory -Force -Path $pkgConfigDir
 
+          # Convert backslashes to forward slashes for pkg-config compatibility
+          $workspacePath = "${{ github.workspace }}".Replace('\', '/')
+
           # VapourSynth
           $vsContent = @"
-          prefix=${{ github.workspace }}/vs_sdk
+          prefix=$workspacePath/vs_sdk
           includedir=`${prefix}/sdk/include/vapoursynth
           libdir=`${prefix}
 

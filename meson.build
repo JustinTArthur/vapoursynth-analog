@@ -90,13 +90,18 @@ endif
 # Force-include our sqliteio stub before any source file includes the real one
 # This works because our stub defines SQLITEIO_H guard, so the real header becomes empty
 sqliteio_stub = meson.current_source_dir() / 'src' / 'stubs' / 'sqliteio.h'
+cpp = meson.get_compiler('cpp')
+if cpp.get_argument_syntax() == 'msvc'
+    force_include_args = ['/FI' + sqliteio_stub]
+else
+    force_include_args = ['-include', sqliteio_stub]
+endif
 
 lddecode_cpp_args = [
     '-D_USE_MATH_DEFINES',
     '-DAPP_BRANCH="' + app_branch + '"',
     '-DAPP_COMMIT="' + app_commit + '"',
-    '-include', sqliteio_stub,
-]
+] + force_include_args
 
 lddecode_library = static_library(
     'lddecode-library',
