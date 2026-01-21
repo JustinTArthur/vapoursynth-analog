@@ -7,15 +7,18 @@ and signals.
 
 ### `decode_4fsc_video`
 Decodes 4𝑓𝑠𝑐-sampled analog video signals to a digital video clip. The signal
-data must be orthogonal analog video system lines with well-formed
-blanking and syncing structure at a stable time base such as those from
+data must be orthogonal video system lines with well-formed blanking and
+syncing structure at a stable time base such as those from
 [ld-decode](https://github.com/happycube/ld-decode) and 
 [vhs-decode](https://github.com/oyvindln/vhs-decode). These files normally have
-a .tbc file extension indicating they are time-base-corrected and must have a
+a .tbc extension indicating they are time-base-corrected and must have a
 metadata sidecar file in JSON or SQlite format.
 
 For color decodes, this returns a clip (VideoNode) in VapourSynth’s `YUV444PS`
 format. For monochrome decodes, the clip is in VapourSynth’s `GRAYS` format.
+Behind the scenes, it employs
+[ld-decode](https://github.com/happycube/ld-decode)'s ld-chroma-decoder
+routines.
 
 ```python
 import vapoursynth as vs
@@ -24,9 +27,9 @@ from vapoursynth import core
 clip = core.analog.decode_4fsc_video("/path/to/capture.tbc")
 
 # The resulting YUV444PS format retains maximum quality from the decode, but
-# it’s uncommon and filters may not expect or work well with it. You’ll often
-# want to convert it to something else using the built-in resize plugin or 
-# fmtconv.
+# the format is uncommon. Filters may not expect or work well with it. You’ll
+# often want to convert it to something else using the built-in resize plugin
+# or fmtconv.
 # R′G′B′ for color/levels adjustment filters:
 workable_clip = clip.resize.Point(format=vs.RGBS)
 # For mvtools2 pipelines like QTGMC that require an integer format:
@@ -143,3 +146,19 @@ decisions:
 Machine learning (Claude Opus 4.5 model) was heavily leveraged in the early
 development of this plugin to reduce the tedium of gluing the various
 components together.
+
+## Alternatives
+* jsaowji's [ldzeug2](https://github.com/jsaowji/ldzeug2) is an excellent
+  alternative VapourSynth video source for TBC files and provides neural
+  network approaches to separating composited luma and chroma
+  components—something that vapoursynth-analog doesn't have. It moves more
+  4fsc processing to the Python domain for flexible scripting opportunities.
+  It focuses on composite NTSC, ST 170, and Japan format signals.
+* ld-decode and vhs-decode come with an `ld-chroma-decoder` tool to decode TBC
+  files to component R′G′B′ or Y′Cb′Cr′ stream output for use in command line
+  workflows.
+* [tbc-video-export](https://github.com/JuniorIsAJitterbug/tbc-video-export) is
+  a convenient wrapper around ld-chroma-decoder and ffmpeg for producing
+  digital video files from TBC files. It's handy if you need to deliver a
+  lossless interlaced intermediate to someone else for filtering or color
+  grading.
