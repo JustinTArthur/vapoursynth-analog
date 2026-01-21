@@ -1,6 +1,6 @@
 /******************************************************************************
  * analog4fsc.cpp
- * vapoursynth-analog - 4FSC video source for VapourSynth
+ * vapoursynth-analog - 4𝑓𝑠𝑐 video source for VapourSynth
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  ******************************************************************************/
@@ -78,7 +78,7 @@ bool VSAnalog4fscSource::IsWidescreen() const {
 
 VSAnalog4fscSource::SampleAspectRatio VSAnalog4fscSource::GetSAR() const {
     // Follow's ld-chroma-decoder current Y4M output, which is based on EBU R92
-    // and SMPTE RP 187 (scaled from BT.601 (13.5 MHz) to 4fSC).
+    // and SMPTE RP 187 (scaled from BT.601 (13.5 MHz) to 4𝑓𝑠𝑐).
     // It's not clear how prolific RP 187 was in the industry, so consider
     // the NTSC ratios subject to change
     bool isNtsc = IsNTSC();
@@ -159,7 +159,7 @@ void VSAnalog4fscSource::SetSeekPreRoll(int preroll) {
 }
 
 bool VSAnalog4fscSource::GetFrame(int frameNumber, float *yData, float *uData, float *vData,
-                                   int yStride, int uStride, int vStride) {
+                                  int yStride, int uStride, int vStride) {
     std::lock_guard<std::mutex> lock(decodeMutex);
 
     ComponentFrame lumaFrame;
@@ -181,9 +181,9 @@ bool VSAnalog4fscSource::GetFrame(int frameNumber, float *yData, float *uData, f
 }
 
 void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
-                                         const ComponentFrame *chromaFrame,
-                                         float *yData, float *uData, float *vData,
-                                         int yStride, int uStride, int vStride) {
+                                        const ComponentFrame *chromaFrame,
+                                        float *yData, float *uData, float *vData,
+                                        int yStride, int uStride, int vStride) {
     const int width = properties.Width;
     const int height = properties.Height;
     const int activeWidth = reader->getActiveWidth();
@@ -198,15 +198,24 @@ void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
     const int chromaFirstActiveLine = chromaReader ? chromaReader->getFirstActiveFrameLine() : firstActiveLine;
     const int chromaActiveVideoStart = chromaReader ? chromaReader->getActiveVideoStart() : activeVideoStart;
 
-    // Y'CbCr scaling constants from ld-chroma-decoder outputwriter.cpp
-    // [Poynton ch25 p305] [BT.601-7 sec 2.5.3]
-    static constexpr double Y_SCALE = 219.0 * 256.0;   // 56064
-    static constexpr double C_SCALE = 112.0 * 256.0;   // 28672
+    // Floating point representations of sample values use [0.0, 1.0] for luma,
+    // luminance, or brightness in standard dynamic range. They use [-0.5, 0.5]
+    // to represent luma difference from red or blue brightness.
+    static constexpr double Y_SCALE = 1.0;  // 1.0 - 0.0
+    static constexpr double C_SCALE = 1.0;  // 0.5 - -0.5
 
-    // ITU-R BT.601-7 [Poynton eq 25.1 p303 and eq 25.5 p307]
-    static constexpr double ONE_MINUS_Kb = 1.0 - 0.114;  // 0.886
-    static constexpr double ONE_MINUS_Kr = 1.0 - 0.299;  // 0.701
+    // The excursion of the color difference signals without broadcast-safe
+    // scaling applied. For example, the blue difference signal can have values
+    // from -0.886 to 0.886
+    // 0.886-(-0.886) == 1.772
+    // These are based on the NTSC-1953 luminance matrix, but at the modern
+    // precision used to derive luma and color-differences from R′G′B′ as used
+    // in ITU-R BT.470, BT.601, and SMPTE ST 170.
+    static constexpr double BLUE_DIFFERENCE_SCALE = 1.772;  // 2 * (1 - 0.114)
+    static constexpr double RED_DIFFERENCE_SCALE = 1.402;   // 2 * (1 - 0.299)
 
+    // Reduction factors to derive broadcast-safe values U and V
+    // from the color difference values (B′ - Y′) and (R′ - Y′)
     // kB = sqrt(209556997.0 / 96146491.0) / 3.0
     // kR = sqrt(221990474.0 / 288439473.0)
     // [Poynton eq 28.1 p336]
@@ -218,17 +227,13 @@ void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
     const double yRange = reader->getWhite16bIre() - yOffset;
     const double uvRange = yRange;
 
-    // Calculate scale factors (same as outputwriter.cpp YUV444P16)
+    // Calculate scale factors to go from our 4𝑓𝑠𝑐 decoder YUV values to what
+    // ITU-T BT.601 calls "re-normalized colour-difference signals".
+    // Factor includes intermediate conversion of the broadcast-safe U and V to
+    // the original color difference values B′ - Y′ and R′ - Y′
     const double yScale = Y_SCALE / yRange;
-    const double cbScale = (C_SCALE / (ONE_MINUS_Kb * kB)) / uvRange;
-    const double crScale = (C_SCALE / (ONE_MINUS_Kr * kR)) / uvRange;
-
-    // Normalization: scale to float range
-    // Y: [0, Y_SCALE] -> [0, 1]
-    // Cb/Cr: centered at 0, scale to approximately [-0.5, 0.5]
-    const double yNorm = 1.0 / Y_SCALE;
-    const double cbNorm = 1.0 / (2.0 * C_SCALE / (ONE_MINUS_Kb * kB));
-    const double crNorm = 1.0 / (2.0 * C_SCALE / (ONE_MINUS_Kr * kR));
+    const double cbScale = (C_SCALE / (BLUE_DIFFERENCE_SCALE * kB)) / uvRange;
+    const double crScale = (C_SCALE / (RED_DIFFERENCE_SCALE * kR)) / uvRange;
 
     // Determine which frame to use for chroma (separate chroma source or same as luma)
     const ComponentFrame &uvSourceFrame = chromaFrame ? *chromaFrame : lumaFrame;
@@ -244,7 +249,7 @@ void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
 
             for (int x = 0; x < activeWidth; x++) {
                 // Y: subtract yOffset and multiply by yScale, normalize to [0, 1]
-                yRow[x] = static_cast<float>((srcY[x] - yOffset) * yScale * yNorm);
+                yRow[x] = static_cast<float>((srcY[x] - yOffset) * yScale);
             }
             // Fill horizontal padding with black (Y=0)
             for (int x = activeWidth; x < width; x++) {
@@ -263,14 +268,16 @@ void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
             auto *vRow = reinterpret_cast<float *>(reinterpret_cast<uint8_t *>(vData) + y * vStride);
 
             if (y < activeHeight) {
-                // Get chroma from the appropriate source (separate chroma TBC or same as luma)
+                // Get chroma from the appropriate source
+                // (separate chroma TBC or same TBC as luma)
                 const double *srcU = uvSourceFrame.u(uvFirstActiveLine + y) + uvActiveVideoStart;
                 const double *srcV = uvSourceFrame.v(uvFirstActiveLine + y) + uvActiveVideoStart;
 
                 for (int x = 0; x < activeWidth; x++) {
-                    // Cb/Cr: multiply by scale, normalize to approximately [-0.5, 0.5]
-                    uRow[x] = static_cast<float>(srcU[x] * cbScale * cbNorm);
-                    vRow[x] = static_cast<float>(srcV[x] * crScale * crNorm);
+                    // Cb/Cr: multiply by scale to normalize to approximately
+                    // [-0.5, 0.5]
+                    uRow[x] = static_cast<float>(srcU[x] * cbScale);
+                    vRow[x] = static_cast<float>(srcV[x] * crScale);
                 }
                 // Fill horizontal padding with neutral chroma (U=V=0)
                 for (int x = activeWidth; x < width; x++) {
