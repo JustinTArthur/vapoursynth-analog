@@ -135,6 +135,11 @@ static const VSFrame *VS_CC VSAnalog4fscSourceGetFrame(
     vsapi->mapSetInt(props, "_SARNum", D->sarNum, maReplace);
     vsapi->mapSetInt(props, "_SARDen", D->sarDen, maReplace);
 
+    // Analog SD video systems are constant frame rate, at least when
+    // time-base-corrected, so inverting the clip fps is sane
+    vsapi->mapSetInt(props, "_DurationNum", D->VI.fpsDen, maReplace);
+    vsapi->mapSetInt(props, "_DurationDen", D->VI.fpsNum, maReplace);
+
     return dst;
 }
 
