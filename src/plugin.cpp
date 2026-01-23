@@ -34,9 +34,8 @@ struct DecodeConfig {
     std::unique_ptr<VSAnalog4fscSource> V;
     int64_t FPSNum = -1;
     int64_t FPSDen = -1;
-    bool RFF = false;
-    bool isMono = false;           // True when using mono decoder (GRAYS output)
-    bool isNTSC = false;           // True for NTSC/PAL-M, false for PAL
+    bool isMono = false;              // True when using mono decoder (GRAYS output)
+    bool isNTSCChromaticity = false;  // True for NTSC/PAL-M, false for PAL
     int firstActiveFrameLine = 0;  // For field order calculation
     int sarNum = 1;                // Sample aspect ratio numerator
     int sarDen = 1;                // Sample aspect ratio denominator
@@ -97,10 +96,12 @@ static const VSFrame *VS_CC VSAnalog4fscSourceGetFrame(
     VSMap *props = vsapi->getFramePropertiesRW(dst);
 
     // Color primaries and matrix coefficients
-    // NTSC (SMPTE 170M): _Primaries=6, _Matrix=6
-    // PAL (BT.470BG): _Primaries=5, _Matrix=5
-    // Transfer is BT.709/BT.601 for both: _Transfer=1
-    if (D->isNTSC) {
+    // For NTSC, use SMPTE ST 170: _Primaries=6, _Matrix=6
+    // PAL (ITU-T BT.470 And BT.1700 for 625-line systems): _Primaries=5, _Matrix=5
+    // Assume BT.709/BT.1886 for both: _Transfer=1
+    // In the future, we may bring on _Primaries=4 (NTSC-1953) as an
+    // alternative to _Primaries=6 (ST 170).
+    if (D->isNTSCChromaticity) {
         vsapi->mapSetInt(props, "_Primaries", 6, maReplace);
         vsapi->mapSetInt(props, "_Matrix", 6, maReplace);
     } else {
@@ -110,7 +111,7 @@ static const VSFrame *VS_CC VSAnalog4fscSourceGetFrame(
     vsapi->mapSetInt(props, "_Transfer", 1, maReplace);
 
     // Most video pipelines don't have a concept of limited-range
-    // floating-point matrix-derived video. This includes the
+    // floating-point matrix-derived video. This includes
     // VapourSynth's built-in resize plugin. Samples are
     // effectively at full ranges (0.0-1.0 for luma,
     // -0.5 to 0.5 for color difference channels) that map to the limited
@@ -253,7 +254,7 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         }
 
         // Store video system info for frame properties
-        D->isNTSC = D->V->IsNTSC();
+        D->isNTSCChromaticity = D->V->IsNTSCLines();
         D->firstActiveFrameLine = D->V->GetFirstActiveFrameLine();
         auto sar = D->V->GetSAR();
         D->sarNum = sar.num;

@@ -67,8 +67,8 @@ int VSAnalog4fscSource::GetFirstActiveFrameLine() const {
     return reader->getFirstActiveFrameLine();
 }
 
-bool VSAnalog4fscSource::IsNTSC() const {
-    VideoSystem system = reader->getVideoSystem();
+bool VSAnalog4fscSource::IsNTSCLines() const {
+    const VideoSystem system = reader->getVideoSystem();
     return (system == NTSC || system == PAL_M);
 }
 
@@ -81,22 +81,21 @@ VSAnalog4fscSource::SampleAspectRatio VSAnalog4fscSource::GetSAR() const {
     // and SMPTE RP 187 (scaled from BT.601 (13.5 MHz) to 4𝑓𝑠𝑐).
     // It's not clear how prolific RP 187 was in the industry, so consider
     // the NTSC ratios subject to change
-    bool isNtsc = IsNTSC();
-    bool widescreen = IsWidescreen();
+    const bool widescreen = IsWidescreen();
 
-    if (!isNtsc) {
-        // PAL
-        if (widescreen) {
-            return {865, 779};  // (16/9) * (576 / (702 * 4*fSC / 13.5))
-        } else {
-            return {259, 311};  // (4/3) * (576 / (702 * 4*fSC / 13.5))
-        }
-    } else {
+    if (IsNTSCLines()) {
         // NTSC / PAL-M
         if (widescreen) {
             return {25, 22};    // (16/9) * (480 / (708 * 4*fSC / 13.5))
         } else {
             return {352, 413}; // (4/3) * (480 / (708 * 4*fSC / 13.5))
+        }
+    } else {
+        // PAL
+        if (widescreen) {
+            return {865, 779};  // (16/9) * (576 / (702 * 4*fSC / 13.5))
+        } else {
+            return {259, 311};  // (4/3) * (576 / (702 * 4*fSC / 13.5))
         }
     }
 }

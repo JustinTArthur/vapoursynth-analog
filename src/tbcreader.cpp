@@ -123,14 +123,14 @@ bool TbcReader::configureDecoder() {
     // Determine which decoder to use
     DecoderType decoder = config.decoder;
 
-    // Auto-select based on video system if not specified
+    // Auto-select based on video system color carrier if not specified
     if (decoder == DecoderType::Auto) {
         switch (videoParameters.system) {
             case NTSC:
-            case PAL_M:
                 decoder = DecoderType::Ntsc2D;
                 break;
             case PAL:
+            case PAL_M:
             default:
                 decoder = DecoderType::Pal2D;
                 break;
@@ -138,24 +138,23 @@ bool TbcReader::configureDecoder() {
     }
 
     // Validate decoder is appropriate for video system
-    bool isNtscSystem = (videoParameters.system == NTSC || videoParameters.system == PAL_M);
-    bool isPalSystem = (videoParameters.system == PAL);
+    const bool isNtscColorCarrier = (videoParameters.system == NTSC);
 
     switch (decoder) {
         case DecoderType::Ntsc1D:
         case DecoderType::Ntsc2D:
         case DecoderType::Ntsc3D:
         case DecoderType::Ntsc3DNoAdapt:
-            if (!isNtscSystem) {
-                qWarning() << "NTSC decoder selected but video system is PAL; using PAL decoder instead";
+            if (!isNtscColorCarrier) {
+                qWarning() << "NTSC decoder selected but video color carrier is PAL; using PAL decoder instead";
                 decoder = DecoderType::Pal2D;
             }
             break;
         case DecoderType::Pal2D:
         case DecoderType::Transform2D:
         case DecoderType::Transform3D:
-            if (!isPalSystem) {
-                qWarning() << "PAL decoder selected but video system is NTSC; using NTSC decoder instead";
+            if (isNtscColorCarrier) {
+                qWarning() << "PAL decoder selected but video color carrier is NTSC; using NTSC decoder instead";
                 decoder = DecoderType::Ntsc2D;
             }
             break;

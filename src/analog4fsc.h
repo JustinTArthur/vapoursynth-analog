@@ -87,8 +87,8 @@ public:
     // Get first active frame line (for field order calculation)
     int GetFirstActiveFrameLine() const;
 
-    // Check if video system is NTSC (or PAL-M) vs PAL
-    bool IsNTSC() const;
+    // Check if video system frame layout is NTSC (or PAL-M) vs PAL
+    bool IsNTSCLines() const;
 
     // Check if source is widescreen (16:9)
     bool IsWidescreen() const;
