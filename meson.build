@@ -111,6 +111,7 @@ lddecode_library = static_library(
     include_directories: [stubs_inc, lddecode_library_inc],
     dependencies: [qt6_dep],
     cpp_args: lddecode_cpp_args,
+    gnu_symbol_visibility: 'hidden',
 )
 
 lddecode_library_dep = declare_dependency(
@@ -176,6 +177,7 @@ lddecode_chroma = static_library(
     include_directories: [lddecode_chroma_inc, lddecode_library_inc],
     dependencies: [qt6_dep, fftw3_dep, lddecode_library_dep],
     cpp_args: lddecode_cpp_args,
+    gnu_symbol_visibility: 'hidden',
 )
 
 lddecode_chroma_dep = declare_dependency(
@@ -216,4 +218,5 @@ shared_library(
     install_dir: vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth',
     name_prefix: '',  # Don't add 'lib' prefix on Unix
     cpp_args: ['-D_USE_MATH_DEFINES'],
+    gnu_symbol_visibility: 'hidden',
 )
