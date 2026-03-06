@@ -20,7 +20,7 @@
 #include "palcolour.h"
 #include "monodecoder.h"
 
-// TBC file reader that wraps ld-decode's TBC library
+// TBC file reader that wraps ld-decode-tools' TBC library
 class TbcReader {
 public:
     // Decoder types matching ld-chroma-decoder command line options

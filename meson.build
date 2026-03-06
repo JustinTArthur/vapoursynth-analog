@@ -14,27 +14,27 @@ project('vapoursynth-analog', 'cpp',
 # VapourSynth
 vapoursynth_dep = dependency('vapoursynth', version: '>=55')
 
-# Qt6 Core (required by ld-decode)
+# Qt6 Core (required by ld-decode-tools)
 # Note: We use sqlite3 C API directly instead of Qt SQL to avoid symbol conflicts with PyQt
 qt6 = import('qt6')
 qt6_dep = dependency('qt6', modules: ['Core'], required: true, method: 'config-tool')
 
-# FFTW3 (required by ld-decode chroma decoders)
+# FFTW3 (required by ld-decode-tools chroma decoders)
 fftw3_dep = dependency('fftw3', required: true)
 
 # SQLite3 (for metadata database access without Qt SQL)
 sqlite3_dep = dependency('sqlite3', required: true)
 
 # =====================
-# ld-decode library paths (relative)
+# ld-decode-tools library paths (relative)
 # =====================
 
-ld_decode_rel = 'extern' / 'ld-decode'
-ld_library_rel = ld_decode_rel / 'tools' / 'library'
-ld_chroma_rel = ld_decode_rel / 'tools' / 'ld-chroma-decoder'
+ld_tools_rel = 'extern' / 'ld-decode-tools'
+ld_library_rel = ld_tools_rel / 'src' / 'library'
+ld_chroma_rel = ld_tools_rel / 'src' / 'ld-chroma-decoder'
 
 # Absolute paths for file() calls
-ld_decode_dir = meson.current_source_dir() / ld_decode_rel
+ld_tools_dir = meson.current_source_dir() / ld_tools_rel
 ld_library_dir = meson.current_source_dir() / ld_library_rel
 ld_chroma_dir = meson.current_source_dir() / ld_chroma_rel
 
@@ -57,7 +57,7 @@ lddecode_library_sources = files(
     ld_library_rel / 'tbc' / 'vitcdecoder.cpp',
 )
 
-# Stub directory for our sqliteio.h replacement (must come before ld-decode includes)
+# Stub directory for our sqliteio.h replacement (must come before ld-decode-tools includes)
 stubs_inc = include_directories('src/stubs')
 
 lddecode_library_inc = include_directories(
@@ -76,11 +76,11 @@ lddecode_library_moc = qt6.compile_moc(
     method: 'config-tool'
 )
 
-# Get git info for ld-decode version macros
+# Get git info for ld-decode-tools version macros
 git_prog = find_program('git', required: false)
 if git_prog.found()
-    git_branch = run_command(git_prog, '-C', ld_decode_dir, 'rev-parse', '--abbrev-ref', 'HEAD', check: false)
-    git_commit = run_command(git_prog, '-C', ld_decode_dir, 'log', '-1', '--format=%h', check: false)
+    git_branch = run_command(git_prog, '-C', ld_tools_dir, 'rev-parse', '--abbrev-ref', 'HEAD', check: false)
+    git_commit = run_command(git_prog, '-C', ld_tools_dir, 'log', '-1', '--format=%h', check: false)
     app_branch = git_branch.returncode() == 0 ? git_branch.stdout().strip() : 'unknown'
     app_commit = git_commit.returncode() == 0 ? git_commit.stdout().strip() : 'unknown'
 else
@@ -88,8 +88,8 @@ else
     app_commit = 'unknown'
 endif
 
-# Force-include our sqliteio stub before any source file includes the real one
-# This works because our stub defines SQLITEIO_H guard, so the real header becomes empty
+# Force-include our sqliteio stub before any source file includes the real one.
+# This works because our stub defines SQLITEIO_H guard, so the real header becomes empty.
 sqliteio_stub = meson.current_source_dir() / 'src' / 'stubs' / 'sqliteio.h'
 cpp = meson.get_compiler('cpp')
 if cpp.get_argument_syntax() == 'msvc'
@@ -121,10 +121,10 @@ lddecode_library_dep = declare_dependency(
 )
 
 # =====================
-# JSON I/O from ld-decode (for JSON to SQLite conversion)
+# JSON I/O from ld-decode-tools (for JSON to SQLite conversion)
 # =====================
 
-ld_jsonconv_rel = ld_decode_rel / 'tools' / 'ld-json-converter'
+ld_jsonconv_rel = ld_tools_rel / 'src' / 'ld-json-converter'
 
 # Only include directory, source is inlined in our wrapper
 lddecode_jsonconv_inc = include_directories(

@@ -1,3 +1,3 @@
-[submodule "extern/ld-decode"]
-	path = extern/ld-decode
-	url = https://github.com/happycube/ld-decode.git
+[submodule "extern/ld-decode-tools"]
+	path = extern/ld-decode-tools
+	url = https://github.com/simoninns/ld-decode-tools.git

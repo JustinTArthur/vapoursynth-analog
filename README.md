@@ -126,22 +126,23 @@ vsanalog.dylib, or vsanalog.so into your VapourSynth plugins directory.
 See [BUILDING.md](BUILDING.md) for build dependencies and instructions.
 
 ## Implementation Notes
-Signal decoding functionality comes from the inner code of ld-decode’s
-ld-chroma-decoder command line tool. This was done to take advantage of great
+Signal decoding functionality comes from
+[ld-decode-tools](https://github.com/simoninns/ld-decode-tools)’
+ld-chroma-decoder. This was done to take advantage of great
 work already done on that project including the composite video
 separation/transformation decode processes, which would have been hard to
 replicate.
 
-Using ld-decode’s code directly (in a submodule here) forces a few design
+Using ld-decode-tools’ code directly (in a submodule here) forces a few design
 decisions:
 * To ease legal distribution of this plugin, I must make this project available
   under the GPL 3 license or one that’s compatible.
 * ld-chroma-decoder’s code relies on QtCore and Qt’s SQLite plugin which would
   make them dependencies. I had a machine learning model write a pure
-  SQLite alternative to ld-decode’s JSON to SQLite metadata sidecar convertor.
-  By avoiding the Qt’s SQLite plugin, the plugin is less likely to cause
-  crashes from a symbol collision with another linked Qt such PyQt’s when using
-  vspreview.
+  SQLite alternative to the JSON to SQLite metadata sidecar converter.
+  By avoiding Qt’s SQLite plugin, the plugin is less likely to cause
+  crashes from a symbol collision with another linked Qt such as PyQt’s when
+  using vspreview.
 
 Machine learning (Claude Opus 4.5 model) was heavily leveraged in the early
 development of this plugin to reduce the tedium of gluing the various
@@ -154,7 +155,7 @@ components together.
   components—something that vapoursynth-analog doesn't have. It moves more
   4fsc processing to the Python domain for flexible scripting opportunities.
   It focuses on composite NTSC, ST 170, and Japan format signals.
-* ld-decode and vhs-decode come with an `ld-chroma-decoder` tool to decode TBC
+* ld-decode-tools comes with an `ld-chroma-decoder` tool to decode TBC
   files to component R′G′B′ or Y′Cb′Cr′ stream output for use in command line
   workflows.
 * [tbc-video-export](https://github.com/JuniorIsAJitterbug/tbc-video-export) is

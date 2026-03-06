@@ -53,7 +53,11 @@ struct FieldData {
 };
 
 void parseVideoParams(const QJsonObject &obj, VideoParams &params) {
-    if (obj.contains("system")) params.system = obj["system"].toString();
+    if (obj.contains("system")) {
+        params.system = obj["system"].toString();
+        // Normalize legacy "PAL-M" to "PAL_M" to match SQLite schema
+        if (params.system == "PAL-M") params.system = "PAL_M";
+    }
     if (obj.contains("numberOfSequentialFields")) params.numberOfSequentialFields = obj["numberOfSequentialFields"].toInt();
     if (obj.contains("fieldWidth")) params.fieldWidth = obj["fieldWidth"].toInt();
     if (obj.contains("fieldHeight")) params.fieldHeight = obj["fieldHeight"].toInt();

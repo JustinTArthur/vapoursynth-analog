@@ -69,7 +69,7 @@ bool readVideoParameters(sqlite3 *db, LdDecodeMetaData::VideoParameters &vp) {
     QString systemStr = getTextColumn(stmt, 0);
     if (systemStr == "PAL") {
         vp.system = PAL;
-    } else if (systemStr == "PAL_M") {
+    } else if (systemStr == "PAL_M" || systemStr == "PAL-M") {
         vp.system = PAL_M;
     } else {
         vp.system = NTSC;

@@ -339,7 +339,7 @@ bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame) {
 
     // Load fields for this frame (and any look-behind/ahead needed)
     QVector<SourceField> fields;
-    qint32 startIndex, endIndex;
+    qint32 startIndex = 0, endIndex = 0;
 
     if (!loadFieldsForFrame(frameNumber, fields, startIndex, endIndex)) {
         lastError = "Failed to load fields for frame " + QString::number(frameNumber);

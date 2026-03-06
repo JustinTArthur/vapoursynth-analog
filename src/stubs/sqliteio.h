@@ -1,8 +1,8 @@
 /******************************************************************************
  * sqliteio.h (stub)
- * vapoursynth-analog - Stub header to replace ld-decode's Qt SQL-based sqliteio.h
+ * vapoursynth-analog - Stub header to replace ld-decode-tools' Qt SQL-based sqliteio.h
  *
- * This stub provides minimal declarations to satisfy includes from ld-decode
+ * This stub provides minimal declarations to satisfy includes from ld-decode-tools
  * library files without actually using Qt SQL. We use our own sqlite3-based
  * metadata reader instead.
  *
@@ -21,7 +21,7 @@
 #include <QVariant>
 #include <stdexcept>
 
-// Stub QSqlQuery - provides minimal interface to compile ld-decode code
+// Stub QSqlQuery - provides minimal interface to compile ld-decode-tools code
 // The read/write methods that use this are never called in our code path
 class QSqlQuery {
 public:
