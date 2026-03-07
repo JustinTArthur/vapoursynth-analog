@@ -17,15 +17,18 @@
 
 #include <QCoreApplication>
 
-// Ensure Qt is initialized for SQL support
-static std::unique_ptr<QCoreApplication> qtApp;
+// Ensure Qt is initialized for ld-decode-tools library support.
+// The QCoreApplication is intentionally leaked without storing for explicit
+// deletion. If the plugin is used in a [Py]Qt app like vspreview, destroying
+// ours would crash in ~QCoreApplication if our C++ static destructors run
+// after the app already tore down the QApplication.
 static int fakeArgc = 1;
 static char fakeArgv0[] = "vsanalog";
 static char *fakeArgv[] = { fakeArgv0, nullptr };
 
 static void ensureQtInitialized() {
     if (!QCoreApplication::instance()) {
-        qtApp = std::make_unique<QCoreApplication>(fakeArgc, fakeArgv);
+        new QCoreApplication(fakeArgc, fakeArgv);
     }
 }
 
