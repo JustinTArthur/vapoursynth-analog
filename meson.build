@@ -1,5 +1,5 @@
 project('vapoursynth-analog', 'cpp',
-    version : '1.0.0',
+    version : '0.1.0',
     default_options : [
         'buildtype=release',
         'cpp_std=c++20',

@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -12,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -50,7 +51,7 @@ jobs:
           meson compile -C build
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vsanalog-linux-x64
           path: build/vsanalog.so
@@ -59,7 +60,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -97,7 +98,7 @@ jobs:
           meson compile -C build
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vsanalog-linux-arm64
           path: build/vsanalog.so
@@ -106,7 +107,7 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -128,7 +129,7 @@ jobs:
           meson compile -C build
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vsanalog-macos-arm64
           path: build/vsanalog.dylib
@@ -137,7 +138,7 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -159,7 +160,7 @@ jobs:
           meson compile -C build
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vsanalog-macos-x64
           path: build/vsanalog.dylib
@@ -168,7 +169,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -271,7 +272,37 @@ jobs:
           meson compile -C build
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vsanalog-windows-x64
           path: build/vsanalog.dll
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux-x64, build-linux-arm64, build-macos-arm64, build-macos-x64, build-windows-x64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          cd artifacts
+          for dir in vsanalog-*; do
+            case "$dir" in
+              *windows*) ext="dll" ;;
+              *macos*)   ext="dylib" ;;
+              *)         ext="so" ;;
+            esac
+            cp "$dir/vsanalog.$ext" "../${dir}.${ext}"
+          done
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: vsanalog-*
