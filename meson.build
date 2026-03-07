@@ -194,6 +194,7 @@ vsanalog_sources = files(
     'src/plugin.cpp',
     'src/analog4fsc.cpp',
     'src/tbcreader.cpp',
+    'src/dropoutcorrector.cpp',
     'src/jsonconverter_wrapper.cpp',
     'src/sqlite3_metadata_reader.cpp',
 )

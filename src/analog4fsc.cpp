@@ -25,6 +25,9 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
         config.paddingMultiple = opts->paddingMultiple;
         config.reverseFields = opts->reverseFields;
         config.phaseCompensation = opts->phaseCompensation;
+        config.dropoutCorrect = opts->dropoutCorrect;
+        config.dropoutOvercorrect = opts->dropoutOvercorrect;
+        config.dropoutIntra = opts->dropoutIntra;
         if (!opts->decoder.empty()) {
             config.decoder = TbcReader::parseDecoderName(
                 QString::fromStdString(opts->decoder));
@@ -36,12 +39,32 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
                                 reader->getLastError().toStdString());
     }
 
+    // Add extra sources for multi-source dropout correction (luma/composite)
+    if (opts) {
+        for (const auto &extraPath : opts->dropoutExtraLumaSources) {
+            if (!reader->addExtraSource(extraPath)) {
+                throw VSAnalogException("Failed to add extra luma source: " +
+                                        reader->getLastError().toStdString());
+            }
+        }
+    }
+
     // Open separate chroma source if provided (for color-under formats like VHS)
     if (chromaSourcePath) {
         chromaReader = std::make_unique<TbcReader>();
         if (!chromaReader->open(*chromaSourcePath, config)) {
             throw VSAnalogException("Failed to open chroma TBC file: " +
                                     chromaReader->getLastError().toStdString());
+        }
+
+        // Add extra chroma sources for multi-source dropout correction
+        if (opts) {
+            for (const auto &extraPath : opts->dropoutExtraChromaSources) {
+                if (!chromaReader->addExtraSource(extraPath)) {
+                    throw VSAnalogException("Failed to add extra chroma source: " +
+                                            chromaReader->getLastError().toStdString());
+                }
+            }
         }
 
         // Validate that both sources have compatible dimensions
@@ -158,18 +181,19 @@ void VSAnalog4fscSource::SetSeekPreRoll(int preroll) {
 }
 
 bool VSAnalog4fscSource::GetFrame(int frameNumber, float *yData, float *uData, float *vData,
-                                  int yStride, int uStride, int vStride) {
+                                  int yStride, int uStride, int vStride,
+                                  DropoutCorrectionStats *stats) {
     std::lock_guard<std::mutex> lock(decodeMutex);
 
     ComponentFrame lumaFrame;
-    if (!reader->decodeFrame(frameNumber, lumaFrame)) {
+    if (!reader->decodeFrame(frameNumber, lumaFrame, stats)) {
         return false;
     }
 
     // If we have a separate chroma source, decode from it too
     if (chromaReader) {
         ComponentFrame chromaFrame;
-        if (!chromaReader->decodeFrame(frameNumber, chromaFrame)) {
+        if (!chromaReader->decodeFrame(frameNumber, chromaFrame, stats)) {
             return false;
         }
         convertToFloat(lumaFrame, &chromaFrame, yData, uData, vData, yStride, uStride, vStride);

@@ -8,6 +8,7 @@
 #include "tbcreader.h"
 #include "jsonconverter_wrapper.h"
 #include "sqlite3_metadata_reader.h"
+#include "vbidecoder.h"
 
 #include <QFileInfo>
 #include <QDebug>
@@ -35,38 +36,24 @@ TbcReader::~TbcReader() {
     close();
 }
 
-bool TbcReader::open(const std::filesystem::path &tbcPath, const Configuration &cfg) {
-    close();
-    config = cfg;
-
-    QString tbcPathStr = QString::fromStdString(tbcPath.string());
-
-    // Try to find the metadata file (.tbc.db or just .db alongside .tbc)
+bool TbcReader::openTbcSource(const QString &tbcPathStr,
+                              LdDecodeMetaData &meta, SourceVideo &video) {
+    // Find metadata file (.db or .json, converting JSON to SQLite if needed)
     QFileInfo tbcInfo(tbcPathStr);
     QString baseName = tbcInfo.absolutePath() + "/" + tbcInfo.completeBaseName();
     QString dbPath = baseName + ".db";
 
-    // Try .tbc.db first (if filename was something.tbc)
     if (!QFileInfo::exists(dbPath)) {
         dbPath = tbcPathStr + ".db";
     }
 
-    // If no .db file exists, check for JSON metadata and convert it
     if (!QFileInfo::exists(dbPath)) {
-        // Try common JSON metadata file patterns
         QString jsonPath = baseName + ".json";
-        if (!QFileInfo::exists(jsonPath)) {
-            jsonPath = tbcPathStr + ".json";
-        }
-        if (!QFileInfo::exists(jsonPath)) {
-            // Try .tbc.json pattern
-            jsonPath = baseName + ".tbc.json";
-        }
+        if (!QFileInfo::exists(jsonPath)) jsonPath = tbcPathStr + ".json";
+        if (!QFileInfo::exists(jsonPath)) jsonPath = baseName + ".tbc.json";
 
         if (QFileInfo::exists(jsonPath)) {
             qInfo() << "Found JSON metadata, converting to SQLite:" << jsonPath;
-
-            // Convert JSON to SQLite
             if (!convertJsonToSqlite(jsonPath, dbPath)) {
                 lastError = "Failed to convert JSON metadata to SQLite: " + jsonPath;
                 return false;
@@ -77,24 +64,36 @@ bool TbcReader::open(const std::filesystem::path &tbcPath, const Configuration &
         }
     }
 
-    // Read metadata using our sqlite3-based reader (avoids Qt SQL symbol conflicts)
-    if (!Sqlite3MetadataReader::read(dbPath, *metadata)) {
+    if (!Sqlite3MetadataReader::read(dbPath, meta)) {
         lastError = "Failed to read metadata from: " + dbPath;
         return false;
     }
 
-    videoParameters = metadata->getVideoParameters();
-    if (!videoParameters.isValid) {
+    auto vp = meta.getVideoParameters();
+    if (!vp.isValid) {
         lastError = "Invalid video parameters in metadata";
         return false;
     }
 
-    // Open the TBC video file
-    qint32 fieldLength = videoParameters.fieldWidth * videoParameters.fieldHeight;
-    if (!sourceVideo->open(tbcPathStr, fieldLength, videoParameters.fieldWidth)) {
+    qint32 fieldLength = vp.fieldWidth * vp.fieldHeight;
+    if (!video.open(tbcPathStr, fieldLength, vp.fieldWidth)) {
         lastError = "Failed to open TBC file: " + tbcPathStr;
         return false;
     }
+
+    return true;
+}
+
+bool TbcReader::open(const std::filesystem::path &tbcPath, const Configuration &cfg) {
+    close();
+    config = cfg;
+
+    QString tbcPathStr = QString::fromStdString(tbcPath.string());
+    if (!openTbcSource(tbcPathStr, *metadata, *sourceVideo)) {
+        return false;
+    }
+
+    videoParameters = metadata->getVideoParameters();
 
     // Configure the appropriate decoder
     if (!configureDecoder()) {
@@ -271,8 +270,55 @@ void TbcReader::close() {
     if (isOpen) {
         sourceVideo->close();
         metadata->clear();
+        extraSources.clear();
+        primaryVbiScanned = false;
         isOpen = false;
     }
+}
+
+bool TbcReader::addExtraSource(const std::filesystem::path &tbcPath) {
+    if (!isOpen) {
+        lastError = "Primary source must be opened before adding extra sources";
+        return false;
+    }
+
+    // Scan primary VBI range on first extra source addition
+    if (!primaryVbiScanned) {
+        primaryVbiAvailable = scanVbiFrameRange(*metadata, primaryDiscTypeCav,
+                                                primaryMinVbiFrame, primaryMaxVbiFrame);
+        primaryVbiScanned = true;
+        if (primaryVbiAvailable) {
+            qInfo() << "Primary source VBI range:" << primaryMinVbiFrame << "-" << primaryMaxVbiFrame
+                    << (primaryDiscTypeCav ? "(CAV)" : "(CLV)");
+        } else {
+            qInfo() << "Primary source has no VBI frame numbers; using sequential alignment for extra sources";
+        }
+    }
+
+    ExtraSource extra;
+    extra.metadata = std::make_unique<LdDecodeMetaData>();
+    extra.sourceVideo = std::make_unique<SourceVideo>();
+
+    QString tbcPathStr = QString::fromStdString(tbcPath.string());
+    if (!openTbcSource(tbcPathStr, *extra.metadata, *extra.sourceVideo)) {
+        return false;
+    }
+
+    // Scan VBI frame range (optional — falls back to sequential alignment)
+    extra.vbiAvailable = scanVbiFrameRange(*extra.metadata, extra.discTypeCav,
+                                            extra.minVbiFrame, extra.maxVbiFrame);
+    if (extra.vbiAvailable) {
+        qInfo() << "Extra source" << extraSources.size() << "VBI range:"
+                << extra.minVbiFrame << "-" << extra.maxVbiFrame
+                << (extra.discTypeCav ? "(CAV)" : "(CLV)");
+    } else {
+        qInfo() << "Extra source" << extraSources.size()
+                << "has no VBI frame numbers; using sequential alignment ("
+                << extra.metadata->getNumberOfFrames() << "frames)";
+    }
+
+    extraSources.push_back(std::move(extra));
+    return true;
 }
 
 int TbcReader::getWidth() const {
@@ -311,6 +357,122 @@ TbcReader::FrameRate TbcReader::getFrameRate() const {
     }
 }
 
+// Scan all frames in a metadata source to determine VBI frame range.
+// Adapted from CorrectorPool::setMinAndMaxVbiFrames().
+bool TbcReader::scanVbiFrameRange(LdDecodeMetaData &meta, bool &isCav,
+                                   qint32 &minFrame, qint32 &maxFrame) {
+    VbiDecoder vbiDecoder;
+    qint32 cavCount = 0, clvCount = 0;
+    qint32 cavMin = 1000000, cavMax = 0;
+    qint32 clvMin = 1000000, clvMax = 0;
+
+    for (qint32 seqFrame = 1; seqFrame <= meta.getNumberOfFrames(); seqFrame++) {
+        auto vbi1 = meta.getFieldVbi(meta.getFirstFieldNumber(seqFrame)).vbiData;
+        auto vbi2 = meta.getFieldVbi(meta.getSecondFieldNumber(seqFrame)).vbiData;
+        VbiDecoder::Vbi vbi = vbiDecoder.decodeFrame(
+            vbi1[0], vbi1[1], vbi1[2], vbi2[0], vbi2[1], vbi2[2]);
+
+        if (vbi.picNo > 0) {
+            cavCount++;
+            if (vbi.picNo < cavMin) cavMin = vbi.picNo;
+            if (vbi.picNo > cavMax) cavMax = vbi.picNo;
+        }
+
+        if (vbi.clvHr != -1 && vbi.clvMin != -1 &&
+            vbi.clvSec != -1 && vbi.clvPicNo != -1) {
+            clvCount++;
+            LdDecodeMetaData::ClvTimecode timecode;
+            timecode.hours = vbi.clvHr;
+            timecode.minutes = vbi.clvMin;
+            timecode.seconds = vbi.clvSec;
+            timecode.pictureNumber = vbi.clvPicNo;
+            qint32 cvFrame = meta.convertClvTimecodeToFrameNumber(timecode);
+            if (cvFrame < clvMin) clvMin = cvFrame;
+            if (cvFrame > clvMax) clvMax = cvFrame;
+        }
+    }
+
+    if (cavCount == 0 && clvCount == 0) {
+        return false;
+    }
+
+    if (cavCount > clvCount) {
+        isCav = true;
+        minFrame = cavMin;
+        maxFrame = cavMax;
+    } else {
+        isCav = false;
+        minFrame = clvMin;
+        maxFrame = clvMax;
+    }
+
+    return true;
+}
+
+qint32 TbcReader::vbiToSequential(qint32 vbiFrame, qint32 minVbiFrame) {
+    return vbiFrame - minVbiFrame + 1;
+}
+
+qint32 TbcReader::sequentialToVbi(qint32 seqFrame, qint32 minVbiFrame) {
+    return (minVbiFrame - 1) + seqFrame;
+}
+
+void TbcReader::loadExtraSourceFrames(int frameNumber,
+                                       QVector<ExtraSourceFrame> &extras) {
+    extras.clear();
+    if (extraSources.empty()) return;
+
+    // frameNumber is 0-based; sequential frame numbers are 1-based
+    qint32 primarySeq = frameNumber + 1;
+
+    // Compute primary VBI frame number if VBI alignment is available
+    qint32 primaryVbi = primaryVbiAvailable
+        ? sequentialToVbi(primarySeq, primaryMinVbiFrame) : 0;
+
+    for (size_t i = 0; i < extraSources.size(); i++) {
+        ExtraSource &src = extraSources[i];
+
+        qint32 extraSeq;
+        if (primaryVbiAvailable && src.vbiAvailable) {
+            // VBI alignment: map primary VBI → extra sequential
+            if (primaryVbi < src.minVbiFrame || primaryVbi > src.maxVbiFrame) continue;
+            extraSeq = vbiToSequential(primaryVbi, src.minVbiFrame);
+        } else {
+            // Sequential alignment: same frame number, clamped to range
+            extraSeq = primarySeq;
+        }
+        if (extraSeq < 1 || extraSeq > src.metadata->getNumberOfFrames()) continue;
+
+        qint32 firstFieldNo = src.metadata->getFirstFieldNumber(extraSeq);
+        qint32 secondFieldNo = src.metadata->getSecondFieldNumber(extraSeq);
+
+        // Skip padded (missing) frames
+        if (src.metadata->getField(firstFieldNo).pad &&
+            src.metadata->getField(secondFieldNo).pad) continue;
+
+        ExtraSourceFrame esf;
+        esf.videoParams = src.metadata->getVideoParameters();
+
+        // Load field data (read in TBC sequential order to minimize seeking)
+        if (firstFieldNo < secondFieldNo) {
+            esf.firstFieldData = src.sourceVideo->getVideoField(firstFieldNo);
+            esf.secondFieldData = src.sourceVideo->getVideoField(secondFieldNo);
+        } else {
+            esf.secondFieldData = src.sourceVideo->getVideoField(secondFieldNo);
+            esf.firstFieldData = src.sourceVideo->getVideoField(firstFieldNo);
+        }
+
+        esf.firstFieldMeta = src.metadata->getField(firstFieldNo);
+        esf.secondFieldMeta = src.metadata->getField(secondFieldNo);
+
+        // Quality from average bPSNR
+        esf.quality = (esf.firstFieldMeta.vitsMetrics.bPSNR
+                      + esf.secondFieldMeta.vitsMetrics.bPSNR) / 2.0;
+
+        extras.append(std::move(esf));
+    }
+}
+
 bool TbcReader::loadFieldsForFrame(int frameNumber, QVector<SourceField> &fields,
                                     qint32 &startIndex, qint32 &endIndex) {
     // Load fields using SourceField's static method
@@ -326,7 +488,8 @@ bool TbcReader::loadFieldsForFrame(int frameNumber, QVector<SourceField> &fields
     return fields.size() > 0;
 }
 
-bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame) {
+bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame,
+                            DropoutCorrectionStats *stats) {
     if (!isOpen) {
         lastError = "TBC file not open";
         return false;
@@ -353,6 +516,22 @@ bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame) {
             if (i + 1 < fields.size()) {
                 std::swap(fields[i], fields[i + 1]);
             }
+        }
+    }
+
+    // Apply dropout correction to the raw TBC field data before chroma decoding
+    if (config.dropoutCorrect && (startIndex + 1) < fields.size()) {
+        DropoutCorrector corrector(videoParameters);
+        if (!extraSources.empty()) {
+            QVector<ExtraSourceFrame> extras;
+            loadExtraSourceFrames(frameNumber, extras);
+            corrector.correctFrame(fields[startIndex], fields[startIndex + 1],
+                                   extras, config.dropoutOvercorrect,
+                                   config.dropoutIntra, stats);
+        } else {
+            corrector.correctFrame(fields[startIndex], fields[startIndex + 1],
+                                   config.dropoutOvercorrect, config.dropoutIntra,
+                                   stats);
         }
     }
 

@@ -17,7 +17,7 @@ metadata sidecar file in JSON or SQlite format.
 For color decodes, this returns a clip (VideoNode) in VapourSynth’s `YUV444PS`
 format. For monochrome decodes, the clip is in VapourSynth’s `GRAYS` format.
 Behind the scenes, it employs
-[ld-decode](https://github.com/happycube/ld-decode)'s ld-chroma-decoder
+[ld-decode](https://github.com/happycube/ld-decode)’s ld-chroma-decoder
 routines.
 
 ```python
@@ -45,21 +45,26 @@ clip = core.analog.decode_4fsc_video("luma.tbc", "chroma.tbc")
 
 #### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `composite_or_luma_source` | string | (required) | Path to the composite or luma .tbc file |
-| `chroma_or_pb_source` | string | (none) | Path to separate chroma .tbc file (for Y/C separated sources) |
-| `pr_source` | string | (none) | Path to Pr component .tbc file (component video, not yet supported) |
-| `decoder` | string | auto | Decoder to use (see below) |
-| `chroma_gain` | float | 1.0 | Chroma gain multiplier |
-| `chroma_phase` | float | 0.0 | Chroma phase adjustment in degrees |
-| `chroma_nr` | float | 0.0 | Chroma noise reduction level (NTSC only) |
-| `luma_nr` | float | 0.0 | Luma noise reduction level |
-| `phase_compensation` | int | 0 | NTSC phase compensation (set to 1 to enable) |
-| `padding_multiple` | int | 8 | Round output dimensions to multiple of this value (0 to disable) |
-| `reverse_fields` | int | 0 | Set to 1 to swap field order |
-| `fpsnum` | int | auto | Override frame rate numerator |
-| `fpsden` | int | 1 | Override frame rate denominator |
+| Parameter                                 | Type | Default | Description |
+|-------------------------------------------|------|---------|-------------|
+| `composite_or_luma_source`                | string | (required) | Path to the composite or luma .tbc file |
+| `chroma_or_pb_source`                     | string | (none) | Path to separate chroma .tbc file (for Y/C separated sources) |
+| `pr_source`                               | string | (none) | Path to Pr component .tbc file (component video, not yet supported) |
+| `decoder`                                 | string | auto | Decoder to use (see below) |
+| `chroma_gain`                             | float | 1.0 | Chroma gain multiplier |
+| `chroma_phase`                            | float | 0.0 | Chroma phase adjustment in degrees |
+| `chroma_nr`                               | float | 0.0 | Chroma noise reduction level (NTSC only) |
+| `luma_nr`                                 | float | 0.0 | Luma noise reduction level |
+| `phase_compensation`                      | int | 0 | NTSC phase compensation (set to 1 to enable) |
+| `padding_multiple`                        | int | 8 | Round output dimensions to multiple of this value (0 to disable) |
+| `dropout_correct`                         | int | 0 | Enable dropout correction using metadata-identified dropouts (1 = on) |
+| `dropout_overcorrect`                     | int | 0 | Extend dropout boundaries by ±24 samples to catch sloped edges on heavily damaged sources |
+| `dropout_intra`                           | int | 0 | Force intra-field only correction; avoids inter-field borrowing artifacts on high-motion content |
+| `dropout_composite_or_luma_extra_sources` | data[] | | Additional TBC files for multi-source dropout correction |
+| `dropout_chroma_extra_sources`            | data[] | | Additional chroma TBC files for multi-source dropout correction (for color-under formats) |
+| `reverse_fields`                          | int | 0 | Set to 1 to swap field order |
+| `fpsnum`                                  | int | auto | Override frame rate numerator |
+| `fpsden`                                  | int | 1 | Override frame rate denominator |
 
 Each source signal file must have a corresponding metadata sidecar file with
 the same base name and a .db or .json extension. If the metadata is in JSON
@@ -82,6 +87,28 @@ The `decoder` parameter accepts the same values as ld-chroma-decoder:
 
 If not specified, the decoder is auto-selected based on the video system in the
 TBC metadata.
+
+#### Dropout Correction
+
+Setting `dropout_correct=1` replaces signal dropout regions identified in the
+TBC metadata with data from nearby clean lines, based on the algorithm from
+[ld-decode-tools](https://github.com/simoninns/ld-decode-tools)’
+ld-dropout-correct. Luma and chroma are sourced independently using FIR 
+frequency separation to find the closest match for each.
+
+For multi-source correction, pass additional TBC captures of the same content
+via `dropout_composite_or_luma_extra_sources` (and `dropout_chroma_extra_sources`
+for Y/C-separated formats). Sources are aligned using VBI frame numbers when
+available (laserdisc CAV/CLV), falling back to sequential frame alignment for
+sources without VBI data (e.g., VHS-decode output).
+
+When dropout correction is enabled, the following frame properties are set:
+
+| Property                       | Type | Description                                |
+|--------------------------------|------|--------------------------------------------|
+| `AnalogDropoutsCorrected`      | int  | Dropout regions successfully replaced      |
+| `AnalogDropoutsFailed`         | int  | Dropout regions where no replacement found |
+| `AnalogDropoutsTotalDistance`   | int  | Sum of line distances for all replacements |
 
 ## Runtime Dependencies
 
@@ -149,17 +176,18 @@ development of this plugin to reduce the tedium of gluing the various
 components together.
 
 ## Alternatives
-* jsaowji's [ldzeug2](https://github.com/jsaowji/ldzeug2) is an excellent
+* jsaowji’s [ldzeug2](https://github.com/jsaowji/ldzeug2) is an excellent
   alternative VapourSynth video source for TBC files and provides neural
   network approaches to separating composited luma and chroma
-  components—something that vapoursynth-analog doesn't have. It moves more
+  components—something that vapoursynth-analog doesn’t have. It moves more
   4fsc processing to the Python domain for flexible scripting opportunities.
   It focuses on composite NTSC, ST 170, and Japan format signals.
 * ld-decode-tools comes with an `ld-chroma-decoder` tool to decode TBC
   files to component R′G′B′ or Y′Cb′Cr′ stream output for use in command line
-  workflows.
+  workflows and an `ld-dropout-correct` tool for generating a pre-corrected
+  intermediate based on upstream dropout detection.
 * [tbc-video-export](https://github.com/JuniorIsAJitterbug/tbc-video-export) is
   a convenient wrapper around ld-chroma-decoder and ffmpeg for producing
-  digital video files from TBC files. It's handy if you need to deliver a
+  digital video files from TBC files. It’s handy if you need to deliver a
   lossless interlaced intermediate to someone else for filtering or color
   grading.

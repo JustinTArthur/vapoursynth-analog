@@ -6,6 +6,7 @@
  ******************************************************************************/
 
 #include "sqlite3_metadata_reader.h"
+#include "dropouts.h"
 
 #include <sqlite3.h>
 #include <QDebug>
@@ -91,21 +92,21 @@ bool readVideoParameters(sqlite3 *db, LdDecodeMetaData::VideoParameters &vp) {
     // Set derived values based on video system
     // (These match the VideoSystemDefaults in ld-decode's lddecodemetadata.cpp)
     if (vp.system == PAL) {
-        // PAL subcarrier frequency: (283.75 * 15625) + 25 Hz
         vp.fSC = (283.75 * 15625.0) + 25.0;
-        // Interlaced line 44 is PAL field line 23, line 620 is field line 311
+        vp.firstActiveFieldLine = 22;
+        vp.lastActiveFieldLine = 308;
         vp.firstActiveFrameLine = 44;
         vp.lastActiveFrameLine = 620;
     } else if (vp.system == PAL_M) {
-        // PAL-M subcarrier frequency: 5.0e6 * (63.0 / 88.0) * (909.0 / 910.0)
         vp.fSC = 5.0e6 * (63.0 / 88.0) * (909.0 / 910.0);
-        // Same frame lines as NTSC
+        vp.firstActiveFieldLine = 20;
+        vp.lastActiveFieldLine = 263;
         vp.firstActiveFrameLine = 40;
         vp.lastActiveFrameLine = 525;
     } else {
-        // NTSC subcarrier frequency: 315.0e6 / 88.0
         vp.fSC = 315.0e6 / 88.0;
-        // Interlaced line 40 is NTSC field line 21, line 525 is field line 263
+        vp.firstActiveFieldLine = 20;
+        vp.lastActiveFieldLine = 263;
         vp.firstActiveFrameLine = 40;
         vp.lastActiveFrameLine = 525;
     }
@@ -173,6 +174,94 @@ bool readFields(sqlite3 *db, LdDecodeMetaData &metadata) {
     return true;
 }
 
+bool readDropOuts(sqlite3 *db, LdDecodeMetaData &metadata) {
+    const char *sql = R"(
+        SELECT field_id, field_line, startx, endx
+        FROM drop_outs
+        WHERE capture_id = 1
+        ORDER BY field_id, field_line, startx;
+    )";
+
+    sqlite3_stmt *stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        // Table may not exist — not an error
+        return true;
+    }
+
+    int count = 0;
+    qint32 currentFieldId = -1;
+    DropOuts currentDropOuts;
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        qint32 fieldId = getIntColumn(stmt, 0);
+        qint32 fieldLine = getIntColumn(stmt, 1);
+        qint32 startx = getIntColumn(stmt, 2);
+        qint32 endx = getIntColumn(stmt, 3);
+
+        if (fieldId != currentFieldId) {
+            // Flush previous field's dropouts
+            if (currentFieldId >= 0 && !currentDropOuts.empty()) {
+                metadata.updateFieldDropOuts(currentDropOuts, currentFieldId + 1);
+            }
+            currentFieldId = fieldId;
+            currentDropOuts = DropOuts();
+        }
+
+        currentDropOuts.append(startx, endx, fieldLine);
+        count++;
+    }
+
+    // Flush last field
+    if (currentFieldId >= 0 && !currentDropOuts.empty()) {
+        metadata.updateFieldDropOuts(currentDropOuts, currentFieldId + 1);
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (count > 0) {
+        qInfo() << "Read" << count << "dropout records from database";
+    }
+    return true;
+}
+
+bool readVbi(sqlite3 *db, LdDecodeMetaData &metadata) {
+    const char *sql = R"(
+        SELECT field_id, vbi0, vbi1, vbi2
+        FROM vbi
+        WHERE capture_id = 1
+        ORDER BY field_id;
+    )";
+
+    sqlite3_stmt *stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        // Table may not exist — not an error
+        return true;
+    }
+
+    int count = 0;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        qint32 fieldId = getIntColumn(stmt, 0);
+        LdDecodeMetaData::Vbi vbi;
+        vbi.inUse = true;
+        vbi.vbiData[0] = getIntColumn(stmt, 1);
+        vbi.vbiData[1] = getIntColumn(stmt, 2);
+        vbi.vbiData[2] = getIntColumn(stmt, 3);
+
+        // seqNo is 1-based
+        metadata.updateFieldVbi(vbi, fieldId + 1);
+        count++;
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (count > 0) {
+        qInfo() << "Read" << count << "VBI records from database";
+    }
+    return true;
+}
+
 } // anonymous namespace
 
 bool Sqlite3MetadataReader::read(const QString &dbPath, LdDecodeMetaData &metadata) {
@@ -198,6 +287,12 @@ bool Sqlite3MetadataReader::read(const QString &dbPath, LdDecodeMetaData &metada
 
     // Read field records
     if (!readFields(db, metadata)) {
+        sqlite3_close(db);
+        return false;
+    }
+
+    // Read dropout and VBI data (optional tables)
+    if (!readDropOuts(db, metadata) || !readVbi(db, metadata)) {
         sqlite3_close(db);
         return false;
     }

@@ -7,6 +7,7 @@
 
 #include "version.h"
 #include "analog4fsc.h"
+#include "dropoutcorrector.h"
 
 #include <filesystem>
 #include <memory>
@@ -39,6 +40,7 @@ struct DecodeConfig {
     int firstActiveFrameLine = 0;  // For field order calculation
     int sarNum = 1;                // Sample aspect ratio numerator
     int sarDen = 1;                // Sample aspect ratio denominator
+    bool dropoutCorrect = false;   // Whether dropout correction is enabled
 };
 
 // Frame getter callback
@@ -77,11 +79,13 @@ static const VSFrame *VS_CC VSAnalog4fscSourceGetFrame(
     }
 
     // Decode the frame
+    DropoutCorrectionStats docStats;
     try {
         if (!D->V->GetFrame(n, yData, uData, vData,
                            static_cast<int>(yStride),
                            static_cast<int>(uStride),
-                           static_cast<int>(vStride))) {
+                           static_cast<int>(vStride),
+                           D->dropoutCorrect ? &docStats : nullptr)) {
             vsapi->freeFrame(dst);
             vsapi->setFilterError("Failed to decode frame", frameCtx);
             return nullptr;
@@ -140,6 +144,13 @@ static const VSFrame *VS_CC VSAnalog4fscSourceGetFrame(
     // time-base-corrected, so inverting the clip fps is sane
     vsapi->mapSetInt(props, "_DurationNum", D->VI.fpsDen, maReplace);
     vsapi->mapSetInt(props, "_DurationDen", D->VI.fpsNum, maReplace);
+
+    // Dropout correction statistics (only set when correction is enabled)
+    if (D->dropoutCorrect) {
+        vsapi->mapSetInt(props, "AnalogDropoutsCorrected", docStats.corrected, maReplace);
+        vsapi->mapSetInt(props, "AnalogDropoutsFailed", docStats.failed, maReplace);
+        vsapi->mapSetInt(props, "AnalogDropoutsTotalDistance", docStats.totalDistance, maReplace);
+    }
 
     return dst;
 }
@@ -220,6 +231,34 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
             phaseComp = 0;
         Opts.phaseCompensation = (phaseComp != 0);
 
+        // Dropout correction options
+        int dropoutCorrect = vsapi->mapGetInt(In, "dropout_correct", 0, &err);
+        if (err)
+            dropoutCorrect = 0;
+        Opts.dropoutCorrect = (dropoutCorrect != 0);
+        int dropoutOvercorrect = vsapi->mapGetInt(In, "dropout_overcorrect", 0, &err);
+        if (err)
+            dropoutOvercorrect = 0;
+        Opts.dropoutOvercorrect = (dropoutOvercorrect != 0);
+        int dropoutIntra = vsapi->mapGetInt(In, "dropout_intra", 0, &err);
+        if (err)
+            dropoutIntra = 0;
+        Opts.dropoutIntra = (dropoutIntra != 0);
+
+        // Extra sources for multi-source dropout correction
+        int numExtraLuma = vsapi->mapNumElements(In, "dropout_composite_or_luma_extra_sources");
+        for (int i = 0; i < numExtraLuma && numExtraLuma > 0; i++) {
+            const char *path = vsapi->mapGetData(In, "dropout_composite_or_luma_extra_sources", i, &err);
+            if (!err && path)
+                Opts.dropoutExtraLumaSources.emplace_back(path);
+        }
+        int numExtraChroma = vsapi->mapNumElements(In, "dropout_chroma_extra_sources");
+        for (int i = 0; i < numExtraChroma && numExtraChroma > 0; i++) {
+            const char *path = vsapi->mapGetData(In, "dropout_chroma_extra_sources", i, &err);
+            if (!err && path)
+                Opts.dropoutExtraChromaSources.emplace_back(path);
+        }
+
         // Get decoder name (optional)
         const char *decoderName = vsapi->mapGetData(In, "decoder", 0, &err);
         if (!err && decoderName)
@@ -253,7 +292,8 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
                 : "Failed to query YUV444PS format");
         }
 
-        // Store video system info for frame properties
+        // Store config for frame property decisions
+        D->dropoutCorrect = Opts.dropoutCorrect;
         D->isNTSCChromaticity = D->V->IsNTSCLines();
         D->firstActiveFrameLine = D->V->GetFirstActiveFrameLine();
         auto sar = D->V->GetSAR();
@@ -316,6 +356,11 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "luma_nr:float:opt;"
         "phase_compensation:int:opt;"
         "padding_multiple:int:opt;"
+        "dropout_correct:int:opt;"
+        "dropout_overcorrect:int:opt;"
+        "dropout_intra:int:opt;"
+        "dropout_composite_or_luma_extra_sources:data[]:opt;"
+        "dropout_chroma_extra_sources:data[]:opt;"
         "fpsnum:int:opt;"
         "fpsden:int:opt;",
         "clip:vnode;",

@@ -9,7 +9,9 @@
 #define TBCREADER_H
 
 #include <QString>
+#include <QVector>
 #include <memory>
+#include <vector>
 #include <filesystem>
 
 #include "lddecodemetadata.h"
@@ -19,6 +21,7 @@
 #include "comb.h"
 #include "palcolour.h"
 #include "monodecoder.h"
+#include "dropoutcorrector.h"
 
 // TBC file reader that wraps ld-decode-tools' TBC library
 class TbcReader {
@@ -48,6 +51,9 @@ public:
         int paddingMultiple = 8;         // Output padding multiple (0 = no padding)
         bool reverseFields = false;
         bool phaseCompensation = false;  // NTSC phase compensation
+        bool dropoutCorrect = false;     // Enable dropout correction
+        bool dropoutOvercorrect = false; // Extend dropout boundaries (±24 samples)
+        bool dropoutIntra = false;       // Intra-field only correction
         DecoderType decoder = DecoderType::Auto;
     };
 
@@ -86,8 +92,15 @@ public:
     // Get active region offsets (for extracting from ComponentFrame)
     int getActiveVideoStart() const { return videoParameters.activeVideoStart; }
 
+    // Add an extra source for multi-source dropout correction.
+    // Extra sources are aligned to the primary via VBI frame numbers.
+    // Returns true on success. Must be called after open().
+    bool addExtraSource(const std::filesystem::path &tbcPath);
+
     // Decode a frame to Y'CbCr (returns ComponentFrame with Y, U, V planes)
-    bool decodeFrame(int frameNumber, ComponentFrame &frame);
+    // If stats is non-null, accumulates dropout correction statistics.
+    bool decodeFrame(int frameNumber, ComponentFrame &frame,
+                     DropoutCorrectionStats *stats = nullptr);
 
     // Get the last error message
     QString getLastError() const { return lastError; }
@@ -95,6 +108,25 @@ public:
 private:
     std::unique_ptr<LdDecodeMetaData> metadata;
     std::unique_ptr<SourceVideo> sourceVideo;
+
+    // Extra sources for multi-source dropout correction
+    struct ExtraSource {
+        std::unique_ptr<LdDecodeMetaData> metadata;
+        std::unique_ptr<SourceVideo> sourceVideo;
+        bool vbiAvailable = false;
+        bool discTypeCav = false;
+        qint32 minVbiFrame = 0;
+        qint32 maxVbiFrame = 0;
+    };
+    std::vector<ExtraSource> extraSources;
+
+    // VBI frame alignment for multi-source dropout correction.
+    // If VBI data is unavailable, falls back to sequential alignment.
+    bool primaryVbiScanned = false;
+    bool primaryVbiAvailable = false;
+    bool primaryDiscTypeCav = false;
+    qint32 primaryMinVbiFrame = 0;
+    qint32 primaryMaxVbiFrame = 0;
 
     // Decoders - only one will be active at a time
     std::unique_ptr<Comb> combFilter;          // For NTSC
@@ -121,8 +153,23 @@ private:
     bool loadFieldsForFrame(int frameNumber, QVector<SourceField> &fields,
                             qint32 &startIndex, qint32 &endIndex);
 
+    // Open a TBC's metadata (.db or .json→.db) and video file into the given objects
+    bool openTbcSource(const QString &tbcPathStr,
+                       LdDecodeMetaData &meta, SourceVideo &video);
+
     // Configure the appropriate decoder based on video system and settings
     bool configureDecoder();
+
+    // VBI alignment helpers for multi-source dropout correction
+    bool scanVbiFrameRange(LdDecodeMetaData &meta, bool &isCav,
+                           qint32 &minFrame, qint32 &maxFrame);
+    qint32 vbiToSequential(qint32 vbiFrame, qint32 minVbiFrame);
+    qint32 sequentialToVbi(qint32 seqFrame, qint32 minVbiFrame);
+
+    // Load extra source fields for a given primary frame number
+    // and build the ExtraSourceFrame vector for DropoutCorrector
+    void loadExtraSourceFrames(int frameNumber,
+                               QVector<ExtraSourceFrame> &extras);
 };
 
 #endif // TBCREADER_H

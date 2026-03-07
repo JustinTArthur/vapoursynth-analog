@@ -11,10 +11,12 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include <cstdint>
 
 class TbcReader;
 class ComponentFrame;
+struct DropoutCorrectionStats;
 
 // Video format description
 struct VSAnalogVideoFormat {
@@ -56,6 +58,11 @@ struct VSAnalog4fscOptions {
     int paddingMultiple = 8;       // Output padding multiple (0 = no padding)
     bool reverseFields = false;
     bool phaseCompensation = false; // NTSC phase compensation
+    bool dropoutCorrect = false;   // Enable dropout correction
+    bool dropoutOvercorrect = false; // Extend dropout boundaries (±24 samples)
+    bool dropoutIntra = false;     // Intra-field only correction
+    std::vector<std::filesystem::path> dropoutExtraLumaSources;   // Extra TBC sources for multi-source DO correction
+    std::vector<std::filesystem::path> dropoutExtraChromaSources; // Extra chroma TBC sources (for color-under formats)
     std::string decoder;           // Decoder name (empty = auto)
 };
 
@@ -113,9 +120,11 @@ public:
     // Get a frame - writes YUV float data to the provided buffers
     // yData, uData, vData: pointers to output buffers (float)
     // yStride, uStride, vStride: strides in bytes
+    // If stats is non-null, accumulates dropout correction statistics.
     // Returns true on success
     bool GetFrame(int frameNumber, float *yData, float *uData, float *vData,
-                  int yStride, int uStride, int vStride);
+                  int yStride, int uStride, int vStride,
+                  DropoutCorrectionStats *stats = nullptr);
 
 private:
     std::unique_ptr<TbcReader> reader;        // Primary (luma/composite) source
