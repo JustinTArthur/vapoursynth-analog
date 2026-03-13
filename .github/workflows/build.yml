@@ -70,22 +70,67 @@ jobs:
           name: vsanalog-linux-x86_64
           path: vsanalog-*.tar.xz
 
-      - name: Build wheel and sdist
-        run: pipx run build --wheel --sdist -o dist/
+      - name: Build sdist
+        run: pipx run build --sdist -o dist/
         env:
           PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-wheel-linux-x86_64
-          path: dist/*.whl
 
       - name: Upload sdist
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-sdist
           path: dist/*.tar.gz
+
+      - name: Build manylinux wheel
+        run: |
+          mkdir -p wheelhouse
+          docker run --rm \
+            -v "${{ github.workspace }}:/src:ro" \
+            -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash -exc '
+          PYBIN="/opt/python/cp312-cp312/bin"
+          export PATH="${PYBIN}:${PATH}"
+
+          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
+
+          python3 -m pip install --quiet aqtinstall
+          python3 -m aqt install-qt linux desktop 6.2.4 gcc_64 \
+            --outputdir /opt/qt --archives qtbase icu
+          QT_PREFIX="/opt/qt/6.2.4/gcc_64"
+          export PATH="${QT_PREFIX}/bin:${PATH}"
+          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
+          export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
+
+          mkdir -p /usr/include/vapoursynth
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h \
+            -o /usr/include/vapoursynth/VapourSynth4.h
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h \
+            -o /usr/include/vapoursynth/VSHelper4.h
+          cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
+          prefix=/usr
+          includedir=\${prefix}/include/vapoursynth
+          libdir=\${prefix}/lib64
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 74
+          Cflags: -I\${includedir}
+          VSPC
+
+          python3 -m pip install --quiet meson ninja meson-python build auditwheel
+
+          cp -a /src /tmp/build
+          cd /tmp/build
+          python3 -m build --wheel --no-isolation -o /tmp/dist/
+          auditwheel repair --plat manylinux_2_28_x86_64 -w /wheelhouse/ /tmp/dist/*.whl
+          '
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-linux-x86_64
+          path: wheelhouse/*.whl
 
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm
@@ -148,16 +193,56 @@ jobs:
           name: vsanalog-linux-arm64
           path: vsanalog-*.tar.xz
 
-      - name: Build wheel
-        run: pipx run build --wheel -o dist/
-        env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
+      - name: Build manylinux wheel
+        run: |
+          mkdir -p wheelhouse
+          docker run --rm \
+            -v "${{ github.workspace }}:/src:ro" \
+            -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
+            quay.io/pypa/manylinux_2_34_aarch64 \
+            bash -exc '
+          PYBIN="/opt/python/cp312-cp312/bin"
+          export PATH="${PYBIN}:${PATH}"
+
+          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
+
+          python3 -m pip install --quiet aqtinstall
+          python3 -m aqt install-qt linux_arm64 desktop 6.7.3 linux_gcc_arm64 \
+            --outputdir /opt/qt --archives qtbase icu
+          QT_PREFIX="/opt/qt/6.7.3/gcc_arm64"
+          export PATH="${QT_PREFIX}/bin:${PATH}"
+          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
+          export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
+
+          mkdir -p /usr/include/vapoursynth
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h \
+            -o /usr/include/vapoursynth/VapourSynth4.h
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h \
+            -o /usr/include/vapoursynth/VSHelper4.h
+          cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
+          prefix=/usr
+          includedir=\${prefix}/include/vapoursynth
+          libdir=\${prefix}/lib64
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 74
+          Cflags: -I\${includedir}
+          VSPC
+
+          python3 -m pip install --quiet meson ninja meson-python build auditwheel
+
+          cp -a /src /tmp/build
+          cd /tmp/build
+          python3 -m build --wheel --no-isolation -o /tmp/dist/
+          auditwheel repair --plat manylinux_2_34_aarch64 -w /wheelhouse/ /tmp/dist/*.whl
+          '
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-wheel-linux-arm64
-          path: dist/*.whl
+          path: wheelhouse/*.whl
 
   build-macos-arm64:
     runs-on: macos-14
@@ -199,7 +284,11 @@ jobs:
           path: vsanalog-*.tar.xz
 
       - name: Build wheel
-        run: pipx run build --wheel -o dist/
+        run: |
+          pip install delocate
+          pipx run build --wheel -o dist/
+          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
+            delocate-wheel -w wheelhouse/ dist/*.whl
         env:
           PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
 
@@ -207,7 +296,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-wheel-macos-arm64
-          path: dist/*.whl
+          path: wheelhouse/*.whl
 
   build-macos-x86_64:
     runs-on: macos-15-intel
@@ -249,7 +338,11 @@ jobs:
           path: vsanalog-*.tar.xz
 
       - name: Build wheel
-        run: pipx run build --wheel -o dist/
+        run: |
+          pip install delocate
+          pipx run build --wheel -o dist/
+          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
+            delocate-wheel -w wheelhouse/ dist/*.whl
         env:
           PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
 
@@ -257,7 +350,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-wheel-macos-x86_64
-          path: dist/*.whl
+          path: wheelhouse/*.whl
 
   build-windows-x64:
     runs-on: windows-latest
@@ -387,13 +480,16 @@ jobs:
         run: |
           $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
+          pip install delvewheel
           pipx run build --wheel -o dist/
+          $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
+          delvewheel repair --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin" $wheel -w wheelhouse/
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-wheel-windows-x64
-          path: dist/*.whl
+          path: wheelhouse/*.whl
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -411,7 +507,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/**/*.tar.xz
+          files: |
+            artifacts/**/*.tar.xz
+            artifacts/**/*.whl
+            artifacts/**/*.tar.gz
 
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')
