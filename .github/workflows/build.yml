@@ -33,15 +33,21 @@ jobs:
           arch: gcc_64
           cache: true
 
-      - name: Install VapourSynth
+      - name: Install VapourSynth headers
         run: |
           git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
-          pushd vapoursynth
-          ./autogen.sh
-          ./configure --prefix=/usr --disable-x86-asm --disable-vsscript --disable-vspipe --disable-python-module
-          make -j$(nproc)
-          sudo make install -j$(nproc)
-          popd
+          sudo mkdir -p /usr/include/vapoursynth
+          sudo cp vapoursynth/include/VapourSynth4.h vapoursynth/include/VSHelper4.h /usr/include/vapoursynth/
+          sudo tee /usr/lib/pkgconfig/vapoursynth.pc > /dev/null << 'EOF'
+          prefix=/usr
+          includedir=${prefix}/include/vapoursynth
+          libdir=${prefix}/lib
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 74
+          Cflags: -I${includedir}
+          EOF
           rm -rf vapoursynth
 
       - name: Build
@@ -105,15 +111,21 @@ jobs:
           arch: linux_gcc_arm64
           cache: true
 
-      - name: Install VapourSynth
+      - name: Install VapourSynth headers
         run: |
           git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
-          pushd vapoursynth
-          ./autogen.sh
-          ./configure --prefix=/usr --disable-x86-asm --disable-vsscript --disable-vspipe --disable-python-module
-          make -j$(nproc)
-          sudo make install -j$(nproc)
-          popd
+          sudo mkdir -p /usr/include/vapoursynth
+          sudo cp vapoursynth/include/VapourSynth4.h vapoursynth/include/VSHelper4.h /usr/include/vapoursynth/
+          sudo tee /usr/lib/pkgconfig/vapoursynth.pc > /dev/null << 'EOF'
+          prefix=/usr
+          includedir=${prefix}/include/vapoursynth
+          libdir=${prefix}/lib
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 74
+          Cflags: -I${includedir}
+          EOF
           rm -rf vapoursynth
 
       - name: Build
