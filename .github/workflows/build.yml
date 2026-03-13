@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-linux-x64:
+  build-linux-x86_64:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -50,11 +50,36 @@ jobs:
             -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
-      - name: Upload artifact
+      - name: Package tarball
+        run: |
+          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
+          BASE="vsanalog-${VERSION}-linux-x86_64"
+          mkdir "${BASE}"
+          cp build/vsanalog.so "${BASE}/"
+          tar --owner=0 --group=0 -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
+
+      - name: Upload tarball
         uses: actions/upload-artifact@v6
         with:
-          name: vsanalog-linux-x64
-          path: build/vsanalog.so
+          name: vsanalog-linux-x86_64
+          path: vsanalog-*.tar.xz
+
+      - name: Build wheel and sdist
+        run: pipx run build --wheel --sdist -o dist/
+        env:
+          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-linux-x86_64
+          path: dist/*.whl
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-sdist
+          path: dist/*.tar.gz
 
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm
@@ -97,11 +122,30 @@ jobs:
             -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
-      - name: Upload artifact
+      - name: Package tarball
+        run: |
+          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
+          BASE="vsanalog-${VERSION}-linux-arm64"
+          mkdir "${BASE}"
+          cp build/vsanalog.so "${BASE}/"
+          tar --owner=0 --group=0 -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
+
+      - name: Upload tarball
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-linux-arm64
-          path: build/vsanalog.so
+          path: vsanalog-*.tar.xz
+
+      - name: Build wheel
+        run: pipx run build --wheel -o dist/
+        env:
+          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-linux-arm64
+          path: dist/*.whl
 
   build-macos-arm64:
     runs-on: macos-14
@@ -128,13 +172,32 @@ jobs:
             -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
-      - name: Upload artifact
+      - name: Package tarball
+        run: |
+          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
+          BASE="vsanalog-${VERSION}-macos-arm64"
+          mkdir "${BASE}"
+          cp build/vsanalog.dylib "${BASE}/"
+          tar --uid 0 --gid 0 --exclude '.DS_Store' -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
+
+      - name: Upload tarball
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-macos-arm64
-          path: build/vsanalog.dylib
+          path: vsanalog-*.tar.xz
 
-  build-macos-x64:
+      - name: Build wheel
+        run: pipx run build --wheel -o dist/
+        env:
+          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-macos-arm64
+          path: dist/*.whl
+
+  build-macos-x86_64:
     runs-on: macos-15-intel
     steps:
       - name: Checkout
@@ -159,11 +222,30 @@ jobs:
             -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           meson compile -C build
 
-      - name: Upload artifact
+      - name: Package tarball
+        run: |
+          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
+          BASE="vsanalog-${VERSION}-macos-x86_64"
+          mkdir "${BASE}"
+          cp build/vsanalog.dylib "${BASE}/"
+          tar --uid 0 --gid 0 --exclude '.DS_Store' -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
+
+      - name: Upload tarball
         uses: actions/upload-artifact@v6
         with:
-          name: vsanalog-macos-x64
-          path: build/vsanalog.dylib
+          name: vsanalog-macos-x86_64
+          path: vsanalog-*.tar.xz
+
+      - name: Build wheel
+        run: pipx run build --wheel -o dist/
+        env:
+          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-macos-x86_64
+          path: dist/*.whl
 
   build-windows-x64:
     runs-on: windows-latest
@@ -271,38 +353,74 @@ jobs:
 
           meson compile -C build
 
-      - name: Upload artifact
+      - name: Package tarball
+        shell: pwsh
+        run: |
+          $VERSION = (Select-String -Path meson.build -Pattern "version\s*:\s*'([^']+)'" | Select-Object -First 1).Matches[0].Groups[1].Value
+          $BASE = "vsanalog-${VERSION}-windows-x64"
+          New-Item -ItemType Directory -Path $BASE | Out-Null
+          Copy-Item build\vsanalog.dll "$BASE\"
+          tar --uid 0 --gid 0 -cf "$BASE.tar" $BASE
+          python -c "import lzma,sys; i=sys.argv[1]; open(i+'.xz','wb').write(lzma.compress(open(i,'rb').read(),format=lzma.FORMAT_XZ,preset=9|lzma.PRESET_EXTREME))" "$BASE.tar"
+          Remove-Item "$BASE.tar"
+
+      - name: Upload tarball
         uses: actions/upload-artifact@v6
         with:
           name: vsanalog-windows-x64
-          path: build/vsanalog.dll
+          path: vsanalog-*.tar.xz
+
+      - name: Build wheel
+        shell: pwsh
+        run: |
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+          $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
+          pipx run build --wheel -o dist/
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-windows-x64
+          path: dist/*.whl
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux-x64, build-linux-arm64, build-macos-arm64, build-macos-x64, build-windows-x64]
+    needs: [build-linux-x86_64, build-linux-arm64, build-macos-arm64, build-macos-x86_64, build-windows-x64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v6
         with:
           path: artifacts
-
-      - name: Prepare release assets
-        run: |
-          cd artifacts
-          for dir in vsanalog-*; do
-            case "$dir" in
-              *windows*) ext="dll" ;;
-              *macos*)   ext="dylib" ;;
-              *)         ext="so" ;;
-            esac
-            cp "$dir/vsanalog.$ext" "../${dir}.${ext}"
-          done
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: vsanalog-*
+          files: artifacts/**/*.tar.xz
+
+  publish-pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux-x86_64, build-linux-arm64, build-macos-arm64, build-macos-x86_64, build-windows-x64]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - name: Download sdist
+        uses: actions/download-artifact@v6
+        with:
+          name: vsanalog-sdist
+          path: dist/
+
+      - name: Download wheels
+        uses: actions/download-artifact@v6
+        with:
+          pattern: vsanalog-wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

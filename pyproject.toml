@@ -1,0 +1,13 @@
+[build-system]
+requires = ["meson-python>=0.13", "meson>=1.0"]
+build-backend = "mesonpy"
+
+[project]
+name = "vsanalog"
+description = "VapourSynth plugin for working with digitized analog video signals"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+dynamic = ["version"]
+
+[tool.meson-python.args]
+setup = ["-Dbuild_wheel=true"]

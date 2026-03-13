@@ -1,0 +1,5 @@
+option('build_wheel',
+    type: 'boolean',
+    value: false,
+    description: 'Build as a Python wheel that installs plugin to vapoursynth/plugins package.',
+)

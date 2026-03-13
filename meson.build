@@ -1,5 +1,5 @@
 project('vapoursynth-analog', 'cpp',
-    version : '0.1.0',
+    version : '0.1.1',
     default_options : [
         'buildtype=release',
         'cpp_std=c++20',
@@ -201,6 +201,16 @@ vsanalog_sources = files(
 
 vsanalog_inc = include_directories('src')
 
+# When building as a wheel, install to vapoursynth/plugins/ in site-packages
+# so the plugin is auto-loaded by VapourSynth's site-packages plugin discovery.
+# Otherwise, install to VapourSynth's system plugin directory via pkg-config.
+if get_option('build_wheel')
+    py = import('python').find_installation(pure: false)
+    plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins'
+else
+    plugin_install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'
+endif
+
 shared_library(
     'vsanalog',
     vsanalog_sources,
@@ -216,7 +226,7 @@ shared_library(
         lddecode_chroma_dep,
     ],
     install: true,
-    install_dir: vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth',
+    install_dir: plugin_install_dir,
     name_prefix: '',  # Don't add 'lib' prefix on Unix
     cpp_args: ['-D_USE_MATH_DEFINES'],
     gnu_symbol_visibility: 'hidden',
