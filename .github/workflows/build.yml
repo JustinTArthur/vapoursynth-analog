@@ -118,12 +118,13 @@ jobs:
           Cflags: -I\${includedir}
           VSPC
 
-          python3 -m pip install --quiet meson ninja meson-python build auditwheel
+          python3 -m pip install --quiet meson ninja meson-python build auditwheel wheel
 
           cp -a /src /tmp/build
           cd /tmp/build
           python3 -m build --wheel --no-isolation -o /tmp/dist/
           auditwheel repair --plat manylinux_2_28_x86_64 -w /wheelhouse/ /tmp/dist/*.whl
+          python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
           '
 
       - name: Upload wheel
@@ -230,12 +231,13 @@ jobs:
           Cflags: -I\${includedir}
           VSPC
 
-          python3 -m pip install --quiet meson ninja meson-python build auditwheel
+          python3 -m pip install --quiet meson ninja meson-python build auditwheel wheel
 
           cp -a /src /tmp/build
           cd /tmp/build
           python3 -m build --wheel --no-isolation -o /tmp/dist/
           auditwheel repair --plat manylinux_2_34_aarch64 -w /wheelhouse/ /tmp/dist/*.whl
+          python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
           '
 
       - name: Upload wheel
@@ -285,10 +287,11 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip install delocate
+          pip install delocate wheel
           pipx run build --wheel -o dist/
           DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
             delocate-wheel -w wheelhouse/ dist/*.whl
+          python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
         env:
           PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
 
@@ -339,10 +342,11 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip install delocate
+          pip install delocate wheel
           pipx run build --wheel -o dist/
           DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
             delocate-wheel -w wheelhouse/ dist/*.whl
+          python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
         env:
           PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
 
@@ -480,10 +484,11 @@ jobs:
         run: |
           $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
           $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
-          pip install delvewheel
+          pip install delvewheel wheel
           pipx run build --wheel -o dist/
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
           delvewheel repair --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin" $wheel -w wheelhouse/
+          python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
