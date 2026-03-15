@@ -1,5 +1,5 @@
 project('vapoursynth-analog', 'cpp',
-    version : '0.1.1',
+    version : '0.1.2',
     default_options : [
         'buildtype=release',
         'cpp_std=c++20',
@@ -207,6 +207,7 @@ vsanalog_inc = include_directories('src')
 if get_option('build_wheel')
     py = import('python').find_installation(pure: false)
     plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins'
+    subdir('python/vsanalog')
 else
     plugin_install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'
 endif

@@ -145,8 +145,19 @@ Install VapourSynth, then ensure Qt6, FFTW3, and SQLite3 DLLs are available in
 your PATH or alongside the plugin.
 
 ### Installing The Plugin
-Obtain or build the plugin for your operating system. Place vsanalog.dll,
-vsanalog.dylib, or vsanalog.so into your VapourSynth plugins directory.
+
+The simplest way to install is via pip into a Python environment such as a 
+venv:
+```sh
+pip install vsanalog
+```
+This installs both the native plugin and a Python module with type-hinted
+wrappers like `vsanalog.decode_4fsc_video`. The plugin is automatically loaded
+when you use the Python module.
+
+Alternatively, obtain or build the plugin for your operating system and place
+vsanalog.dll, vsanalog.dylib, or vsanalog.so into your VapourSynth plugins
+directory.
 
 ## Building from Source
 
