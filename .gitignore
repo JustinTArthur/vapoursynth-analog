@@ -74,3 +74,6 @@ test_case/
 # OS
 .DS_Store
 Thumbs.db
+
+# Docs build output
+docs/_build/

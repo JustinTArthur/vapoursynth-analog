@@ -77,41 +77,10 @@ def decode_4fsc_video(
     fpsnum: int | None = None,
     fpsden: int = 1,
 ) -> vs.VideoNode:
-    """Decode 4FSC (four times subcarrier) digitized analog video.
+    """Decode 4𝑓𝑠𝑐 (four times subcarrier frequency) digitized analog video.
 
     Reads time-base corrected (TBC) captures produced by ld-decode or vhs-decode
-    and returns a VapourSynth clip with decoded video.
-
-    Args:
-        composite_or_luma_source: Path to the composite or luma-only .tbc file.
-        chroma_or_pb_source: Path to a separate chroma .tbc file, used for
-            Y/C-separated sources like S-Video or VHS color-under.
-        pr_source: Path to the Pr component .tbc file (component video).
-        decoder: Chroma decoder to use. One of ``"ntsc1d"``, ``"ntsc2d"``,
-            ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"pal2d"``, ``"transform2d"``,
-            ``"transform3d"``, or ``"mono"``. When *None*, the decoder is
-            chosen automatically based on the video system.
-        reverse_fields: Swap field order.
-        chroma_gain: Chroma gain multiplier for saturation adjustment.
-        chroma_phase: Chroma phase adjustment in degrees.
-        chroma_nr: Chroma noise-reduction level (NTSC decoders only).
-        luma_nr: Luma noise-reduction level.
-        phase_compensation: Enable NTSC phase compensation.
-        padding_multiple: Round output dimensions to this multiple.
-            Set to 0 to disable padding.
-        dropout_correct: Enable dropout correction.
-        dropout_overcorrect: Extend dropout boundaries by ±24 samples
-            (for heavily damaged sources).
-        dropout_intra: Force intra-field-only dropout correction.
-        dropout_composite_or_luma_extra_sources: Additional composite/luma
-            .tbc files for multi-source dropout correction.
-        dropout_chroma_extra_sources: Additional chroma .tbc files for
-            multi-source dropout correction.
-        fpsnum: Override frame-rate numerator.
-        fpsden: Override frame-rate denominator (used with *fpsnum*).
-
-    Returns:
-        A VapourSynth clip in YUV444PS or GRAYS format (32-bit float).
+    and returns a VapourSynth clip in YUV444PS or GRAYS format (32-bit float).
     """
     kwargs: dict[str, Any] = {}
 
