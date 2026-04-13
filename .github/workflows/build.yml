@@ -95,9 +95,12 @@ jobs:
           dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
 
           python3 -m pip install --quiet aqtinstall
-          python3 -m aqt install-qt linux desktop 6.2.4 gcc_64 \
+          # Qt renamed the Linux desktop arch from gcc_64 to linux_gcc_64
+          # after 6.2.x; 6.8.3 only exposes linux_gcc_64. aqt still drops
+          # the linux_ prefix from the install dir, so QT_PREFIX is unchanged.
+          python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
             --outputdir /opt/qt --archives qtbase icu
-          QT_PREFIX="/opt/qt/6.2.4/gcc_64"
+          QT_PREFIX="/opt/qt/6.8.3/gcc_64"
           export PATH="${QT_PREFIX}/bin:${PATH}"
           export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
           export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
@@ -285,6 +288,13 @@ jobs:
           name: vsanalog-macos-arm64
           path: vsanalog-*.tar.xz
 
+      - name: Install Qt6 6.8.3 (for wheel bundling)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: clang_64
+          cache: true
+
       - name: Build wheel
         run: |
           pip install delocate wheel
@@ -339,6 +349,13 @@ jobs:
         with:
           name: vsanalog-macos-x86_64
           path: vsanalog-*.tar.xz
+
+      - name: Install Qt6 6.8.3 (for wheel bundling)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: clang_64
+          cache: true
 
       - name: Build wheel
         run: |
@@ -478,6 +495,13 @@ jobs:
         with:
           name: vsanalog-windows-x64
           path: vsanalog-*.tar.xz
+
+      - name: Install Qt6 6.8.3 (for wheel bundling)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
 
       - name: Build wheel
         shell: pwsh
