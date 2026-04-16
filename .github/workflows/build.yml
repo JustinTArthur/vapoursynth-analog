@@ -511,7 +511,10 @@ jobs:
           pip install delvewheel wheel
           pipx run build --wheel -o dist/
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
-          delvewheel repair --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin" $wheel -w wheelhouse/
+          # vsanalog.dll lives outside any Python package this wheel owns, so
+          # delvewheel needs --analyze-existing to inspect it; --namespace-pkg
+          # keeps it from minting __init__.py files inside vapoursynth/.
+          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin" $wheel -w wheelhouse/
           python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
       - name: Upload wheel
