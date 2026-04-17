@@ -1,10 +1,20 @@
 Changelog
 =========
 
+0.2.2
+-----
+- Y/C-separated signals correctly force ``mono`` decoder for luma processing.
+- Y/C-separated decodes scale chroma planes against the chroma 4fsc's own
+  IRE excursion instead of luma signal’s, fixing potential mismatch.
+
+0.2.1
+-----
+- Windows wheel now contains full dependency set.
+
 0.2.0
 ------------------
-- Added a ``vsanalog`` Python wrapper package with type-hinted signatures and
-  an auto-loading fallback for older VapourSynth versions that predate
+- Added ``vsanalog`` Python wrapper package with type-hinted signatures and
+  auto-loading fallback for older VapourSynth versions that predate
   pip-installable plugins.
 - Retagged wheels as independent from the CPython ABI so a single wheel can
   serve any compatible Python interpreter on a given platform.

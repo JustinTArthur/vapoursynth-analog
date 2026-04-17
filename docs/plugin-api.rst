@@ -51,8 +51,11 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
 
     :param str decoder:
         Chroma decoder to use. See :ref:`decoder-options` below. When not
-        specified, the decoder is chosen automatically based on the video system
-        in the TBC metadata.
+        specified, the decoder is chosen automatically based on the video
+        system in TBC metadata. When ``chroma_or_pb_source`` is supplied, this
+        decoder applies to the chroma TBC only; the luma TBC is read with the
+        ``mono`` decoder so it isn't run through Y/C separation a second
+        time.
 
     :param int reverse_fields:
         Set to 1 to swap field order.

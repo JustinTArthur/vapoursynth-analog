@@ -34,7 +34,15 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
         }
     }
 
-    if (!reader->open(sourcePath, config)) {
+    TbcReader::Configuration lumaConfig = config;
+    if (chromaSourcePath) {
+        // When a separate chroma 4fsc is supplied, assume the luma file is
+        // already Y/C-separated and avoid chroma-aware decoders that might
+        // reseparate based on potentially-absent chroma in the luma source.
+        lumaConfig.decoder = TbcReader::DecoderType::Mono;
+    }
+
+    if (!reader->open(sourcePath, lumaConfig)) {
         throw VSAnalogException("Failed to open TBC file: " +
                                 reader->getLastError().toStdString());
     }
@@ -245,10 +253,15 @@ void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
     static constexpr double kB = 0.49211104112248356308804691718185;
     static constexpr double kR = 0.87728321993817866838972487283129;
 
-    // Derive scaling factors from video parameters
+    // Derive scaling factors from video parameters. Chroma is normalized
+    // against the chroma source's own IRE excursion: when a separate chroma
+    // TBC is supplied (color-under formats), its metadata may declare a
+    // different black/white range than the luma TBC.
     const double yOffset = reader->getBlack16bIre();
     const double yRange = reader->getWhite16bIre() - yOffset;
-    const double uvRange = yRange;
+    const double uvRange = chromaReader
+        ? (chromaReader->getWhite16bIre() - chromaReader->getBlack16bIre())
+        : yRange;
 
     // Calculate scale factors to go from our 4𝑓𝑠𝑐 decoder YUV values to what
     // ITU-T BT.601 calls "re-normalized colour-difference signals".
