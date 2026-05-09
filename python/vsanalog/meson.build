@@ -9,3 +9,9 @@ py.install_sources(
     '__pyinstaller/hook-vsanalog.py',
     subdir: 'vsanalog/__pyinstaller',
 )
+
+py.install_sources(
+    'models/nntransform3d_v1.onnx',
+    'models/nntransform3d_v2.onnx',
+    subdir: 'vsanalog/models',
+)

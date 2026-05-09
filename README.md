@@ -34,6 +34,21 @@ deinterlaced = vsdeinterlace.QTempGaussMC(editable).deinterlace()
 deinterlaced.set_output(0)
 ```
 
+For NTSC composite captures, the neural-network `nntransform3d` decoder
+substitutes the analytical 3D Y/C separation with FFT + ONNX inference for
+sharper chroma on motion content. Both released model versions ship in the
+wheel:
+
+```python
+src = vsanalog.decode_4fsc_video(
+    './Sources/my_home_video.tbc',
+    decoder='nntransform3d',     # NTSC-only; rejects PAL and PAL-M
+    model_version='v2',          # v1 (slower, baseline) or v2 (default)
+    # model_path='/path/to/custom.onnx',  # alternative for custom weights
+)
+```
+
+
 ## Low-level VapourSynth Plugin API
 Whether installed as a Python distribution or if the plugin library is dropped
 in a VapourSynth plugins directory, the plugin exposes a namespace named 
@@ -79,14 +94,21 @@ following runtime dependencies:
 - **Qt6** (Core module)
 - **FFTW3**
 - **SQLite3**
+- **ONNX Runtime** (1.x; CPU execution provider is sufficient — GPU
+  acceleration is supported but not bundled, install
+  `onnxruntime`/`onnxruntime-gpu` separately if desired)
 
 ## Implementation Notes
 Signal decoding functionality comes from
-[ld-decode-tools](https://github.com/simoninns/ld-decode-tools)’
-ld-chroma-decoder. This was done to take advantage of great
-work already done on that project including the composite video
-separation/transformation decode processes, which would have been hard to
-replicate.
+[tbc-tools](https://github.com/harrypm/tbc-tools)’ ld-chroma-decoder, an
+active fork of
+[ld-decode-tools](https://github.com/simoninns/ld-decode-tools). This was done
+to take advantage of great work already done on those projects including the
+composite video separation/transformation decode processes, which would have
+been hard to replicate. The fork also brings the
+[nnTransform3D](https://github.com/oyvindln/vhs-decode/discussions) neural
+network 3D Y/C separator that ships with vapoursynth-analog as the
+`nntransform3d` decoder option.
 
 Using ld-decode-tools’ code directly (in a submodule here) forces a few design
 decisions:

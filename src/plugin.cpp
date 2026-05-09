@@ -267,6 +267,11 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         if (!err && decoderName)
             Opts.decoder = decoderName;
 
+        // Get neural-network model path (optional; required for NN decoders)
+        const char *nnModelPath = vsapi->mapGetData(In, "nn_model_path", 0, &err);
+        if (!err && nnModelPath)
+            Opts.nnModelPath = nnModelPath;
+
         // Create the source
         D->V = std::make_unique<VSAnalog4fscSource>(
             Source,
@@ -352,6 +357,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "chroma_or_pb_source:data:opt;"
         "pr_source:data:opt;"
         "decoder:data:opt;"
+        "nn_model_path:data:opt;"
         "reverse_fields:int:opt;"
         "chroma_gain:float:opt;"
         "chroma_phase:float:opt;"

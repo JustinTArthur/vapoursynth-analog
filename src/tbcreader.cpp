@@ -19,11 +19,21 @@ TbcReader::DecoderType TbcReader::parseDecoderName(const QString &name) {
     if (lower == "ntsc2d") return DecoderType::Ntsc2D;
     if (lower == "ntsc3d") return DecoderType::Ntsc3D;
     if (lower == "ntsc3dnoadapt") return DecoderType::Ntsc3DNoAdapt;
+    if (lower == "nntransform3d") return DecoderType::NnTransform3D;
     if (lower == "pal2d") return DecoderType::Pal2D;
     if (lower == "transform2d") return DecoderType::Transform2D;
     if (lower == "transform3d") return DecoderType::Transform3D;
     if (lower == "mono") return DecoderType::Mono;
     return DecoderType::Auto;
+}
+
+bool TbcReader::isNeuralDecoder(DecoderType decoder) {
+    switch (decoder) {
+        case DecoderType::NnTransform3D:
+            return true;
+        default:
+            return false;
+    }
 }
 
 TbcReader::TbcReader()
@@ -149,6 +159,29 @@ bool TbcReader::configureDecoder() {
                 decoder = DecoderType::Pal2D;
             }
             break;
+        case DecoderType::NnTransform3D:
+            // Neural decoders are trained on a specific signal: NTSC composite
+            // at 4fsc with NTSC-style chroma encoding. PAL and PAL-M have a
+            // different chroma modulation scheme (alternating phase per line),
+            // so the model can't separate Y/C correctly there. Reject rather
+            // than silently fall back.
+            if (videoParameters.system != NTSC) {
+                lastError = QStringLiteral(
+                    "nnTransform3D decoder requires an NTSC source; "
+                    "this capture's video system is %1"
+                ).arg(videoParameters.system == PAL
+                          ? QStringLiteral("PAL")
+                          : QStringLiteral("PAL_M"));
+                return false;
+            }
+            if (config.nnModelPath.empty()) {
+                lastError = QStringLiteral(
+                    "nnTransform3D decoder requires a model file path "
+                    "(set via the model_version or model_path argument)"
+                );
+                return false;
+            }
+            break;
         case DecoderType::Pal2D:
         case DecoderType::Transform2D:
         case DecoderType::Transform3D:
@@ -170,7 +203,8 @@ bool TbcReader::configureDecoder() {
         case DecoderType::Ntsc1D:
         case DecoderType::Ntsc2D:
         case DecoderType::Ntsc3D:
-        case DecoderType::Ntsc3DNoAdapt: {
+        case DecoderType::Ntsc3DNoAdapt:
+        case DecoderType::NnTransform3D: {
             combFilter = std::make_unique<Comb>();
             Comb::Configuration combConfig;
             combConfig.chromaGain = config.chromaGain;
@@ -196,6 +230,17 @@ bool TbcReader::configureDecoder() {
                     combConfig.dimensions = 3;
                     combConfig.adaptive = false;
                     break;
+                case DecoderType::NnTransform3D:
+                    // nnTransform3D substitutes the analytical 3D-FFT Y/C
+                    // separation step with neural-network inference. The
+                    // remainder of the comb pipeline (I/Q split, NR, transform)
+                    // is unchanged, so the upstream knobs (chromaGain, etc.)
+                    // still apply.
+                    combConfig.dimensions = 3;
+                    combConfig.adaptive = true;
+                    combConfig.nnTransform3D = true;
+                    combConfig.nnModelPath = QString::fromStdString(config.nnModelPath);
+                    break;
                 default:
                     break;
             }
@@ -206,6 +251,7 @@ bool TbcReader::configureDecoder() {
             qInfo() << "Using NTSC decoder:" << static_cast<int>(decoder)
                     << "dimensions:" << combConfig.dimensions
                     << "adaptive:" << combConfig.adaptive
+                    << "nnTransform3D:" << combConfig.nnTransform3D
                     << "phaseComp:" << combConfig.phaseCompensation
                     << "cNR:" << combConfig.cNRLevel
                     << "yNR:" << combConfig.yNRLevel;
@@ -546,6 +592,7 @@ bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame,
         case DecoderType::Ntsc2D:
         case DecoderType::Ntsc3D:
         case DecoderType::Ntsc3DNoAdapt:
+        case DecoderType::NnTransform3D:
             combFilter->decodeFrames(fields, startIndex, endIndex, componentFrames);
             break;
 

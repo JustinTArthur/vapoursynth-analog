@@ -23,6 +23,8 @@ Build Dependencies
 - `Qt6 <https://www.qt.io/>`_ (Core module)
 - `FFTW3 <http://www.fftw.org/>`_
 - `SQLite3 <https://www.sqlite.org/>`_
+- `ONNX Runtime <https://onnxruntime.ai/>`_ (1.x; the CPU execution provider
+  is sufficient — used by neural-network decoders such as ``nntransform3d``)
 
 Installing Build Dependencies
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -31,25 +33,30 @@ Installing Build Dependencies
 
 .. code-block:: bash
 
-    brew install meson qt6 fftw sqlite vapoursynth
+    brew install meson qt6 fftw sqlite vapoursynth onnxruntime
 
 **Ubuntu/Debian:**
 
 .. code-block:: bash
 
-    sudo apt install meson build-essential qt6-base-dev libfftw3-dev libsqlite3-dev vapoursynth-dev
+    sudo apt install meson build-essential qt6-base-dev libfftw3-dev libsqlite3-dev vapoursynth-dev libonnxruntime-dev
+
+If your distribution doesn't ship ``libonnxruntime-dev``, download the
+prebuilt tarball matching your architecture from the
+`ONNX Runtime releases page <https://github.com/microsoft/onnxruntime/releases>`_
+and extract it; point ``PKG_CONFIG_PATH`` at its ``lib/pkgconfig`` directory.
 
 **Fedora:**
 
 .. code-block:: bash
 
-    sudo dnf install meson gcc-c++ qt6-qtbase-devel fftw-devel sqlite-devel vapoursynth-devel
+    sudo dnf install meson gcc-c++ qt6-qtbase-devel fftw-devel sqlite-devel vapoursynth-devel onnxruntime-devel
 
 **Arch Linux:**
 
 .. code-block:: bash
 
-    sudo pacman -S meson qt6-base fftw sqlite vapoursynth
+    sudo pacman -S meson qt6-base fftw sqlite vapoursynth onnxruntime
 
 Compiling the Plugin
 ~~~~~~~~~~~~~~~~~~~~
@@ -167,8 +174,8 @@ See ``.github/workflows/build.yml`` for the full container setup used in CI.
 **Windows:**
 
 Windows wheels need an MSVC developer environment, Qt6, and vcpkg-provided
-FFTW3 and SQLite3. ``delvewheel`` vendors the DLLs from both Qt's ``bin``
-directory and vcpkg's installed tree:
+FFTW3, SQLite3, and ONNX Runtime. ``delvewheel`` vendors the DLLs from both
+Qt's ``bin`` directory and vcpkg's installed tree:
 
 .. code-block:: powershell
 
@@ -180,5 +187,12 @@ directory and vcpkg's installed tree:
     python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
 As on other platforms, ``PKG_CONFIG_PATH`` must resolve ``vapoursynth.pc``,
-``fftw3.pc``, ``sqlite3.pc``, and the Qt6 ``.pc`` files before invoking the
-build.
+``fftw3.pc``, ``sqlite3.pc``, the Qt6 ``.pc`` files, and
+``libonnxruntime.pc`` before invoking the build.
+
+.. note::
+   On macOS, the build automatically stages a renamed copy of
+   ``libonnxruntime.<version>.dylib`` as ``libonnxruntime.1.dylib`` (with an
+   ``@rpath`` install name) so the resulting wheel doesn't pin a specific
+   patch version of ONNX Runtime. The staging logic lives in
+   ``tools/stage_macos_onnxruntime.py``.

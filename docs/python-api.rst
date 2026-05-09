@@ -13,6 +13,8 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         pr_source=None, \
         *, \
         decoder=None, \
+        model_version=None, \
+        model_path=None, \
         reverse_fields=False, \
         chroma_gain=1.0, \
         chroma_phase=0.0, \
@@ -55,10 +57,31 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
 
     :param decoder:
         Chroma decoder to use. One of ``"ntsc1d"``, ``"ntsc2d"``,
-        ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"pal2d"``, ``"transform2d"``,
-        ``"transform3d"``, or ``"mono"``. When *None*, the decoder is chosen
-        automatically based on the video system in the TBC metadata.
+        ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"nntransform3d"``, ``"pal2d"``,
+        ``"transform2d"``, ``"transform3d"``, or ``"mono"``. When *None*, the
+        decoder is chosen automatically based on the video system in the TBC
+        metadata.
+
+        Neural-network decoders (those that load ONNX model weights at
+        runtime) are NTSC-only and reject PAL and PAL-M sources. They take an
+        additional ``model_version`` or ``model_path`` argument; see below.
     :type decoder: :py:class:`str` | None
+
+    :param model_version:
+        Selects which bundled ONNX model to use when *decoder* is a
+        neural-network decoder. For ``decoder="nntransform3d"`` the choices
+        are ``"v1"`` (the original release; CPU baseline) or ``"v2"``
+        (newer/faster, the default). The designations match the
+        nnTransform3D author's original v1/v2 releases. Ignored for
+        non-neural decoders.
+    :type model_version: :py:class:`str` | None
+
+    :param model_path:
+        Filesystem path to a custom ONNX model file. When supplied this
+        overrides *model_version*. Useful for testing alternative weights
+        with the same architecture as the selected decoder. Ignored for
+        non-neural decoders.
+    :type model_path: :py:class:`str` | :py:class:`~pathlib.Path` | None
 
     :param bool reverse_fields:
         Swap field order.
@@ -145,6 +168,45 @@ Choosing a Decoder
 
     # Luma-only (monochrome) decode:
     clip = decode_4fsc_video("capture.tbc", decoder="mono")
+
+Neural-Network Decode (NTSC only)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``nntransform3d`` decoder substitutes the analytical 3D-FFT Y/C
+separation step inside the 3D adaptive comb with neural-network inference
+based on
+`nnTransform3D <https://github.com/oyvindln/vhs-decode/discussions>`_.
+Source restrictions: NTSC composite at 4𝑓𝑠𝑐. PAL and PAL-M are rejected
+because the model was trained on NTSC chroma encoding only.
+
+.. code-block:: python
+
+    # Default (v2 weights — newer/faster):
+    clip = decode_4fsc_video("ntsc_capture.tbc", decoder="nntransform3d")
+
+    # Pin to the original v1 weights:
+    clip = decode_4fsc_video(
+        "ntsc_capture.tbc",
+        decoder="nntransform3d",
+        model_version="v1",
+    )
+
+    # Use a custom ONNX model with the same architecture
+    # (input ``[B,2,4,16,16]`` → output ``[B,1,4,16,16]``):
+    clip = decode_4fsc_video(
+        "ntsc_capture.tbc",
+        decoder="nntransform3d",
+        model_path="/path/to/my_chroma_net.onnx",
+    )
+
+The other comb-related arguments (``chroma_gain``, ``chroma_phase``,
+``chroma_nr``, ``luma_nr``, ``phase_compensation``) still apply to the
+downstream pipeline.
+
+Inference uses ONNX Runtime's CPU execution provider by default. To use
+hardware acceleration, install a GPU-enabled ONNX Runtime (e.g.
+``onnxruntime-gpu`` for CUDA on Linux/Windows) so it's discoverable in your
+library search path; the runtime auto-selects it when available.
 
 Dropout Correction
 ^^^^^^^^^^^^^^^^^^

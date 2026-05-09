@@ -1,5 +1,5 @@
 project('vapoursynth-analog', 'cpp',
-    version : '0.2.2',
+    version : '0.3.0',
     default_options : [
         'buildtype=release',
         'cpp_std=c++20',
@@ -26,6 +26,35 @@ fftw3_dep = dependency('fftw3', required: true)
 sqlite3_dep = dependency('sqlite3', required: true)
 
 # =====================
+# ONNX Runtime (required; tbc-tools' chroma decoder uses ORT
+# unconditionally outside its CUDA block, so we always link against it)
+# =====================
+# On macOS we always stage a renamed copy of the dylib (with @rpath install_name)
+# so our binary references @rpath/libonnxruntime.1.dylib instead of the
+# version-pinned absolute path Homebrew bakes in. This makes the wheel work
+# with any compatible 1.x ORT delocate-wheel happens to bundle. Other
+# platforms can rely on the system pkg-config / loader chain directly.
+if host_machine.system() == 'darwin'
+    py3_setup = import('python').find_installation('python3', required: true)
+    staging_dir = meson.current_build_dir() / 'onnxruntime-staging'
+    stage_result = run_command(
+        py3_setup,
+        meson.current_source_dir() / 'tools' / 'stage_macos_onnxruntime.py',
+        '--staging', staging_dir,
+        check: true,
+    )
+    message(stage_result.stdout().strip())
+    brew_prefix = run_command('brew', '--prefix', 'onnxruntime', check: true)
+    ort_inc = brew_prefix.stdout().strip() / 'include'
+    onnxruntime_dep = declare_dependency(
+        compile_args: ['-I' + ort_inc, '-I' + ort_inc / 'onnxruntime'],
+        link_args: ['-L' + staging_dir, '-lonnxruntime.1'],
+    )
+else
+    onnxruntime_dep = dependency('libonnxruntime', required: true)
+endif
+
+# =====================
 # ld-decode-tools library paths (relative)
 # =====================
 
@@ -39,6 +68,20 @@ ld_library_dir = meson.current_source_dir() / ld_library_rel
 ld_chroma_dir = meson.current_source_dir() / ld_chroma_rel
 
 # =====================
+# Patch tbc-tools (idempotent) so Comb::Configuration carries an
+# nnModelPath we can set at runtime instead of relying on the embedded
+# byte-blob the upstream CMake generates. See tools/patch_tbc_tools.py.
+# =====================
+py3_patch = import('python').find_installation('python3', required: true)
+patch_result = run_command(
+    py3_patch,
+    meson.current_source_dir() / 'tools' / 'patch_tbc_tools.py',
+    ld_tools_dir,
+    check: true,
+)
+message(patch_result.stdout().strip())
+
+# =====================
 # ld-decode TBC library (lddecode-library)
 # =====================
 
@@ -47,6 +90,7 @@ ld_chroma_dir = meson.current_source_dir() / ld_chroma_rel
 lddecode_library_sources = files(
     ld_library_rel / 'tbc' / 'dropouts.cpp',
     ld_library_rel / 'tbc' / 'filters.cpp',
+    ld_library_rel / 'tbc' / 'jsonio.cpp',
     ld_library_rel / 'tbc' / 'lddecodemetadata.cpp',
     ld_library_rel / 'tbc' / 'logging.cpp',
     ld_library_rel / 'tbc' / 'navigation.cpp',
@@ -121,17 +165,6 @@ lddecode_library_dep = declare_dependency(
 )
 
 # =====================
-# JSON I/O from ld-decode-tools (for JSON to SQLite conversion)
-# =====================
-
-ld_jsonconv_rel = ld_tools_rel / 'src' / 'ld-json-converter'
-
-# Only include directory, source is inlined in our wrapper
-lddecode_jsonconv_inc = include_directories(
-    ld_jsonconv_rel,
-)
-
-# =====================
 # ld-decode chroma library (lddecode-chroma)
 # =====================
 
@@ -170,12 +203,14 @@ lddecode_chroma_moc = qt6.compile_moc(
     method: 'config-tool'
 )
 
+lddecode_chroma_deps = [qt6_dep, fftw3_dep, lddecode_library_dep, onnxruntime_dep]
+
 lddecode_chroma = static_library(
     'lddecode-chroma',
     lddecode_chroma_sources,
     lddecode_chroma_moc,
     include_directories: [lddecode_chroma_inc, lddecode_library_inc],
-    dependencies: [qt6_dep, fftw3_dep, lddecode_library_dep],
+    dependencies: lddecode_chroma_deps,
     cpp_args: lddecode_cpp_args,
     gnu_symbol_visibility: 'hidden',
 )
@@ -183,7 +218,7 @@ lddecode_chroma = static_library(
 lddecode_chroma_dep = declare_dependency(
     include_directories: lddecode_chroma_inc,
     link_with: lddecode_chroma,
-    dependencies: [qt6_dep, fftw3_dep, lddecode_library_dep],
+    dependencies: lddecode_chroma_deps,
 )
 
 # =====================
@@ -212,11 +247,18 @@ else
     plugin_install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'
 endif
 
+vsanalog_cpp_args = ['-D_USE_MATH_DEFINES']
+
+# Embed @loader_path as an install rpath on macOS so dyld (and delocate-wheel's
+# repair pass) can resolve @rpath/libonnxruntime.1.dylib next to our binary.
+vsanalog_install_rpath = ''
+if host_machine.system() == 'darwin'
+    vsanalog_install_rpath = '@loader_path'
+endif
+
 shared_library(
     'vsanalog',
     vsanalog_sources,
-    # Note: lddecode_jsonconv_inc is intentionally NOT included here because it has
-    # a different version of lddecodemetadata.h that lacks blanking16bIre member
     include_directories: [vsanalog_inc, lddecode_chroma_inc, lddecode_library_inc],
     dependencies: [
         vapoursynth_dep.partial_dependency(compile_args: true, includes: true),
@@ -228,7 +270,9 @@ shared_library(
     ],
     install: true,
     install_dir: plugin_install_dir,
+    install_rpath: vsanalog_install_rpath,
+    build_rpath: vsanalog_install_rpath,
     name_prefix: '',  # Don't add 'lib' prefix on Unix
-    cpp_args: ['-D_USE_MATH_DEFINES'],
+    cpp_args: vsanalog_cpp_args,
     gnu_symbol_visibility: 'hidden',
 )

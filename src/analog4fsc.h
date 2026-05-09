@@ -64,6 +64,7 @@ struct VSAnalog4fscOptions {
     std::vector<std::filesystem::path> dropoutExtraLumaSources;   // Extra TBC sources for multi-source DO correction
     std::vector<std::filesystem::path> dropoutExtraChromaSources; // Extra chroma TBC sources (for color-under formats)
     std::string decoder;           // Decoder name (empty = auto)
+    std::string nnModelPath;       // Filesystem path to ONNX model (for NN decoders)
 };
 
 // Exception class for VSAnalog errors

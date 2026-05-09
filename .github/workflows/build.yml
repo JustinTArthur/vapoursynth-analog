@@ -26,6 +26,25 @@ jobs:
             libsqlite3-dev \
             libzimg-dev
 
+      - name: Install ONNX Runtime
+        run: |
+          ORT_VERSION=1.23.2
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+            | sudo tar -xz -C /opt
+          sudo ln -sfn "/opt/onnxruntime-linux-x64-${ORT_VERSION}" /opt/onnxruntime
+          sudo tee /opt/onnxruntime/lib/pkgconfig/libonnxruntime.pc > /dev/null << EOF
+          prefix=/opt/onnxruntime
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: libonnxruntime
+          Description: ONNX Runtime
+          Version: ${ORT_VERSION}
+          Libs: -L\${libdir} -lonnxruntime
+          Cflags: -I\${includedir}
+          EOF
+        shell: bash
+
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
@@ -53,8 +72,10 @@ jobs:
       - name: Build
         run: |
           meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
           meson compile -C build
+        env:
+          LD_LIBRARY_PATH: /opt/onnxruntime/lib
 
       - name: Package tarball
         run: |
@@ -92,7 +113,24 @@ jobs:
           PYBIN="/opt/python/cp312-cp312/bin"
           export PATH="${PYBIN}:${PATH}"
 
-          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
+          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config curl tar
+
+          ORT_VERSION=1.23.2
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+            | tar -xz -C /opt
+          ln -sfn "/opt/onnxruntime-linux-x64-${ORT_VERSION}" /opt/onnxruntime
+          mkdir -p /opt/onnxruntime/lib/pkgconfig
+          cat > /opt/onnxruntime/lib/pkgconfig/libonnxruntime.pc << ORTPC
+          prefix=/opt/onnxruntime
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: libonnxruntime
+          Description: ONNX Runtime
+          Version: ${ORT_VERSION}
+          Libs: -L\${libdir} -lonnxruntime
+          Cflags: -I\${includedir}
+          ORTPC
 
           python3 -m pip install --quiet aqtinstall
           # Qt renamed the Linux desktop arch from gcc_64 to linux_gcc_64
@@ -102,8 +140,8 @@ jobs:
             --outputdir /opt/qt --archives qtbase icu
           QT_PREFIX="/opt/qt/6.8.3/gcc_64"
           export PATH="${QT_PREFIX}/bin:${PATH}"
-          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
-          export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
+          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
+          export LD_LIBRARY_PATH="${QT_PREFIX}/lib:/opt/onnxruntime/lib"
 
           mkdir -p /usr/include/vapoursynth
           curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h \
@@ -153,6 +191,25 @@ jobs:
             libsqlite3-dev \
             libzimg-dev
 
+      - name: Install ONNX Runtime
+        run: |
+          ORT_VERSION=1.23.2
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz" \
+            | sudo tar -xz -C /opt
+          sudo ln -sfn "/opt/onnxruntime-linux-aarch64-${ORT_VERSION}" /opt/onnxruntime
+          sudo tee /opt/onnxruntime/lib/pkgconfig/libonnxruntime.pc > /dev/null << EOF
+          prefix=/opt/onnxruntime
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: libonnxruntime
+          Description: ONNX Runtime
+          Version: ${ORT_VERSION}
+          Libs: -L\${libdir} -lonnxruntime
+          Cflags: -I\${includedir}
+          EOF
+        shell: bash
+
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
@@ -180,8 +237,10 @@ jobs:
       - name: Build
         run: |
           meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
           meson compile -C build
+        env:
+          LD_LIBRARY_PATH: /opt/onnxruntime/lib
 
       - name: Package tarball
         run: |
@@ -208,15 +267,32 @@ jobs:
           PYBIN="/opt/python/cp312-cp312/bin"
           export PATH="${PYBIN}:${PATH}"
 
-          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
+          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config curl tar
+
+          ORT_VERSION=1.23.2
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz" \
+            | tar -xz -C /opt
+          ln -sfn "/opt/onnxruntime-linux-aarch64-${ORT_VERSION}" /opt/onnxruntime
+          mkdir -p /opt/onnxruntime/lib/pkgconfig
+          cat > /opt/onnxruntime/lib/pkgconfig/libonnxruntime.pc << ORTPC
+          prefix=/opt/onnxruntime
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: libonnxruntime
+          Description: ONNX Runtime
+          Version: ${ORT_VERSION}
+          Libs: -L\${libdir} -lonnxruntime
+          Cflags: -I\${includedir}
+          ORTPC
 
           python3 -m pip install --quiet aqtinstall
           python3 -m aqt install-qt linux_arm64 desktop 6.7.3 linux_gcc_arm64 \
             --outputdir /opt/qt --archives qtbase icu
           QT_PREFIX="/opt/qt/6.7.3/gcc_arm64"
           export PATH="${QT_PREFIX}/bin:${PATH}"
-          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
-          export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
+          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
+          export LD_LIBRARY_PATH="${QT_PREFIX}/lib:/opt/onnxruntime/lib"
 
           mkdir -p /usr/include/vapoursynth
           curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h \
@@ -259,7 +335,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install meson fftw sqlite vapoursynth
+          brew install meson fftw sqlite vapoursynth onnxruntime
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
@@ -321,7 +397,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install meson fftw sqlite vapoursynth
+          brew install meson fftw sqlite vapoursynth onnxruntime
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
@@ -407,7 +483,7 @@ jobs:
       - name: Install vcpkg dependencies
         run: |
           vcpkg integrate install
-          vcpkg install fftw3:x64-windows sqlite3:x64-windows
+          vcpkg install fftw3:x64-windows sqlite3:x64-windows onnxruntime:x64-windows
 
       - name: Download VapourSynth SDK
         shell: pwsh
@@ -466,6 +542,21 @@ jobs:
           Cflags: -I`${includedir}
           "@
           $sqliteContent | Out-File -FilePath "$pkgConfigDir/sqlite3.pc" -Encoding ASCII -NoNewline
+
+          # ONNX Runtime
+          $ortContent = @"
+          prefix=C:/vcpkg/installed/x64-windows
+          exec_prefix=`${prefix}
+          libdir=`${prefix}/lib
+          includedir=`${prefix}/include
+
+          Name: libonnxruntime
+          Description: ONNX Runtime
+          Version: 1.23.2
+          Libs: -L`${libdir} -lonnxruntime
+          Cflags: -I`${includedir} -I`${includedir}/onnxruntime
+          "@
+          $ortContent | Out-File -FilePath "$pkgConfigDir/libonnxruntime.pc" -Encoding ASCII -NoNewline
 
       - name: Build
         shell: pwsh

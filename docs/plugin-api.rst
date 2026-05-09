@@ -11,6 +11,7 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         [, chroma_or_pb_source] \
         [, pr_source] \
         [, decoder] \
+        [, nn_model_path] \
         [, reverse_fields=0] \
         [, chroma_gain=1.0] \
         [, chroma_phase=0.0] \
@@ -56,6 +57,13 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         decoder applies to the chroma TBC only; the luma TBC is read with the
         ``mono`` decoder so it isn't run through Y/C separation a second
         time.
+
+    :param str nn_model_path:
+        Filesystem path to an ONNX model file. Required when ``decoder`` is
+        a neural-network decoder (e.g. ``"nntransform3d"``). The high-level
+        Python wrapper (:func:`vsanalog.decode_4fsc_video`) resolves this from
+        ``model_version="v1"|"v2"`` against bundled weights; lower-level
+        callers must supply the path directly.
 
     :param int reverse_fields:
         Set to 1 to swap field order.
@@ -147,6 +155,11 @@ The ``decoder`` parameter accepts the following values:
     * - ``ntsc3dnoadapt``
       - NTSC
       - 3D comb filter without adaptation
+    * - ``nntransform3d``
+      - NTSC
+      - 3D adaptive comb filter with neural-network Y/C separation
+        (``nnTransform3D``). Requires ``nn_model_path``. Rejects PAL/PAL-M
+        sources.
     * - ``pal2d``
       - PAL
       - 2D PALcolour filter (default for PAL)

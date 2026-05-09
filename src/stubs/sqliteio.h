@@ -79,14 +79,28 @@ public:
         throw Error(message);
     }
 
-    // Stub methods - these are never called since we use Sqlite3MetadataReader
-    bool readCaptureMetadata(int &, QString &, QString &,
-                           QString &, QString &,
-                           double &, int &, int &,
-                           int &, int &, int &,
-                           int &, int &,
-                           bool &, bool &, bool &,
-                           int &, int &, int &, QString &) { return false; }
+    // Stub methods - these are never called since we use Sqlite3MetadataReader.
+    // Parameter count and types must match harrypm/tbc-tools'
+    // SqliteReader::readCaptureMetadata (38 params).
+    bool readCaptureMetadata(
+        int &,                                    // captureId
+        QString &, QString &,                     // system, decoder
+        QString &, QString &,                     // gitBranch, gitCommit
+        double &, int &, int &,                   // videoSampleRate, activeVideoStart, activeVideoEnd
+        int &, int &,                             // firstActiveFieldLine, lastActiveFieldLine
+        int &, int &,                             // firstActiveFrameLine, lastActiveFrameLine
+        int &, int &, int &,                      // fieldWidth, fieldHeight, numberOfSequentialFields
+        int &, int &,                             // colourBurstStart, colourBurstEnd
+        bool &, bool &, bool &,                   // isMapped, isSubcarrierLocked, isWidescreen
+        int &, int &, int &,                      // white16bIre, black16bIre, blanking16bIre
+        QString &, double &, double &, double &,  // chromaDecoder, chromaGain, chromaPhase, lumaNR
+        int &, double &, double &,                // ntscAdaptive, ntscAdaptThreshold, ntscChromaWeight
+        int &, double &,                          // ntscPhaseCompensation, palTransformThreshold
+        int &, int &,                             // userEditInSelection, userEditOutSelection
+        int &, QString &,                         // userMarkerSelection, userMarkerComment
+        QString &,                                // userMarkersJson
+        QString &                                 // captureNotes
+    ) { return false; }
 
     bool readPcmAudioParameters(int, int &, bool &,
                               bool &, double &) { return false; }
@@ -128,21 +142,46 @@ public:
 
     bool createSchema() { return false; }
 
-    int writeCaptureMetadata(const QString &, const QString &,
-                           const QString &, const QString &,
-                           double, int, int,
-                           int, int, int,
-                           int, int,
-                           bool, bool, bool,
-                           int, int, int, const QString &) { return -1; }
+    // 37 params, matches harrypm/tbc-tools' SqliteWriter::writeCaptureMetadata.
+    int writeCaptureMetadata(
+        const QString &, const QString &,                // system, decoder
+        const QString &, const QString &,                // gitBranch, gitCommit
+        double, int, int,                                // videoSampleRate, activeVideoStart, activeVideoEnd
+        int, int,                                        // firstActiveFieldLine, lastActiveFieldLine
+        int, int,                                        // firstActiveFrameLine, lastActiveFrameLine
+        int, int, int,                                   // fieldWidth, fieldHeight, numberOfSequentialFields
+        int, int,                                        // colourBurstStart, colourBurstEnd
+        bool, bool, bool,                                // isMapped, isSubcarrierLocked, isWidescreen
+        int, int, int,                                   // white16bIre, black16bIre, blanking16bIre
+        const QString &, double, double, double,         // chromaDecoder, chromaGain, chromaPhase, lumaNR
+        int, double, double,                             // ntscAdaptive, ntscAdaptThreshold, ntscChromaWeight
+        int, double,                                     // ntscPhaseCompensation, palTransformThreshold
+        int, int,                                        // userEditInSelection, userEditOutSelection
+        int, const QString &,                            // userMarkerSelection, userMarkerComment
+        const QString &,                                 // userMarkersJson
+        const QString &                                  // captureNotes
+    ) { return -1; }
 
-    bool updateCaptureMetadata(int, const QString &, const QString &,
-                             const QString &, const QString &,
-                             double, int, int,
-                             int, int, int,
-                             int, int,
-                             bool, bool, bool,
-                             int, int, int, const QString &) { return false; }
+    // 38 params (writeCaptureMetadata + leading captureId).
+    bool updateCaptureMetadata(
+        int,                                             // captureId
+        const QString &, const QString &,                // system, decoder
+        const QString &, const QString &,                // gitBranch, gitCommit
+        double, int, int,                                // videoSampleRate, activeVideoStart, activeVideoEnd
+        int, int,                                        // firstActiveFieldLine, lastActiveFieldLine
+        int, int,                                        // firstActiveFrameLine, lastActiveFrameLine
+        int, int, int,                                   // fieldWidth, fieldHeight, numberOfSequentialFields
+        int, int,                                        // colourBurstStart, colourBurstEnd
+        bool, bool, bool,                                // isMapped, isSubcarrierLocked, isWidescreen
+        int, int, int,                                   // white16bIre, black16bIre, blanking16bIre
+        const QString &, double, double, double,         // chromaDecoder, chromaGain, chromaPhase, lumaNR
+        int, double, double,                             // ntscAdaptive, ntscAdaptThreshold, ntscChromaWeight
+        int, double,                                     // ntscPhaseCompensation, palTransformThreshold
+        int, int,                                        // userEditInSelection, userEditOutSelection
+        int, const QString &,                            // userMarkerSelection, userMarkerComment
+        const QString &,                                 // userMarkersJson
+        const QString &                                  // captureNotes
+    ) { return false; }
 
     bool writePcmAudioParameters(int, int, bool,
                                bool, double) { return false; }

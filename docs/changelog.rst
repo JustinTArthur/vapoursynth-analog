@@ -1,6 +1,25 @@
 Changelog
 =========
 
+0.3.0
+-----
+- New ``nntransform3d`` decoder option for ``decode_4fsc_video``: an
+  NTSC-only 3D adaptive comb that substitutes neural-network inference
+  for the analytical FFT-based Y/C separation step. Two model versions
+  (the original ``v1`` and the newer/faster ``v2``) ship in the wheel;
+  pick one with ``model_version=`` or supply your own weights via
+  ``model_path=``. PAL and PAL-M sources are rejected for this decoder
+  because the model was trained on NTSC chroma encoding only.
+- Switched the bundled signal-decoder submodule from
+  ``simoninns/ld-decode-tools`` to the active
+  ``harrypm/tbc-tools`` fork. Older JSON and SQLite metadata sidecar
+  files remain readable; the SQLite schema is auto-migrated to the
+  fork's expanded version on open.
+- Added ``ONNX Runtime`` (1.x) as a build and runtime dependency. The
+  CPU execution provider is bundled with binary wheels; install
+  ``onnxruntime``/``onnxruntime-gpu`` separately to opt in to hardware
+  acceleration.
+
 0.2.2
 -----
 - Y/C-separated signals correctly force ``mono`` decoder for luma processing.

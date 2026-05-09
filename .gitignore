@@ -43,6 +43,13 @@ build/
 buildDir/
 Build/
 build-*/
+build_local/
+
+# Python build artifacts
+dist/
+wheelhouse/
+__pycache__/
+*.egg-info/
 
 # Temporary files
 *.tmp

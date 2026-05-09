@@ -24,6 +24,34 @@ __version__ = _get_version("vsanalog")
 P = ParamSpec("P")
 R = TypeVar("R")
 
+# Directory holding ONNX model files bundled with the package.
+_MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+
+# Registry of neural-network-based decoders. Keyed by the lowercase decoder
+# string accepted by the plugin. Each entry describes how to resolve a
+# user-supplied ``model_version`` to a bundled .onnx file path.
+#
+# To add a new neural decoder later, append an entry here and (in C++) add a
+# matching ``DecoderType`` value plus the ``parseDecoderName`` mapping. The
+# rest of the wrapper plumbing — kwargs, validation, model resolution — is
+# version-agnostic.
+_NN_DECODERS: dict[str, dict[str, Path]] = {
+    "nntransform3d": {
+        # Author's original v1/v2 designations. Note that tbc-tools' on-disk
+        # filenames historically had these swapped; we use the author's
+        # designations regardless.
+        "v1": _MODELS_DIR / "nntransform3d_v1.onnx",
+        "v2": _MODELS_DIR / "nntransform3d_v2.onnx",
+    },
+}
+
+# Default model version for each NN decoder when the caller doesn't specify
+# one. Newer/faster releases win the default.
+_NN_DECODER_DEFAULT_VERSION: dict[str, str] = {
+    "nntransform3d": "v2",
+}
+
 
 def _get_plugin_path() -> Path:
     """Derive the filesystem path of the bundled vsanalog shared library."""
@@ -55,6 +83,43 @@ def requires_plugin(func: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
+def _resolve_nn_model_path(
+    decoder: str,
+    model_version: str | None,
+    model_path: str | Path | None,
+) -> str:
+    """Resolve a neural decoder's model location to an absolute path string.
+
+    Either ``model_path`` (explicit override) or ``model_version`` (selects a
+    bundled file) must produce a usable path. ``model_path`` wins when both
+    are supplied.
+    """
+    if model_path is not None:
+        resolved = Path(model_path).expanduser()
+        if not resolved.is_file():
+            raise FileNotFoundError(
+                f"model_path {resolved} does not exist or is not a regular file"
+            )
+        return str(resolved)
+
+    versions = _NN_DECODERS[decoder]
+    if model_version is None:
+        model_version = _NN_DECODER_DEFAULT_VERSION[decoder]
+    if model_version not in versions:
+        valid = ", ".join(sorted(versions))
+        raise ValueError(
+            f"Unknown model_version {model_version!r} for decoder {decoder!r}. "
+            f"Valid versions: {valid}."
+        )
+    bundled = versions[model_version]
+    if not bundled.is_file():
+        raise FileNotFoundError(
+            f"Bundled model file not found at {bundled}. The vsanalog "
+            "package may be incomplete; reinstall the wheel."
+        )
+    return str(bundled)
+
+
 @requires_plugin
 def decode_4fsc_video(
     composite_or_luma_source: str | Path,
@@ -62,6 +127,8 @@ def decode_4fsc_video(
     pr_source: str | Path | None = None,
     *,
     decoder: str | None = None,
+    model_version: str | None = None,
+    model_path: str | Path | None = None,
     reverse_fields: bool = False,
     chroma_gain: float = 1.0,
     chroma_phase: float = 0.0,
@@ -81,8 +148,27 @@ def decode_4fsc_video(
 
     Reads time-base corrected (TBC) captures produced by ld-decode or vhs-decode
     and returns a VapourSynth clip in YUV444PS or GRAYS format (32-bit float).
+
+    Neural-network decoders (e.g. ``decoder="nntransform3d"``) require either
+    ``model_version`` to select a bundled model or ``model_path`` to point at
+    a custom ONNX file. Such decoders are NTSC-only — PAL and PAL-M sources
+    will be rejected.
     """
     kwargs: dict[str, Any] = {}
+
+    decoder_lower = decoder.lower() if decoder is not None else None
+    is_nn_decoder = decoder_lower in _NN_DECODERS
+
+    if not is_nn_decoder and (model_version is not None or model_path is not None):
+        raise ValueError(
+            "model_version and model_path are only meaningful for "
+            "neural-network decoders (e.g. nntransform3d); set decoder= "
+            "first."
+        )
+    if is_nn_decoder:
+        kwargs["nn_model_path"] = _resolve_nn_model_path(
+            decoder_lower, model_version, model_path
+        )
 
     # Optional parameters — only pass when explicitly provided so the
     # C++ side can distinguish "not given" from "given as default".

@@ -33,6 +33,9 @@ public:
         Ntsc2D,
         Ntsc3D,
         Ntsc3DNoAdapt,
+        // NTSC neural-network decoders (use Comb filter with NN-based Y/C separation)
+        // NTSC-only: rejects PAL and PAL-M sources at decoder configuration time.
+        NnTransform3D,
         // PAL decoders (use PalColour)
         Pal2D,
         Transform2D,
@@ -55,7 +58,15 @@ public:
         bool dropoutOvercorrect = false; // Extend dropout boundaries (±24 samples)
         bool dropoutIntra = false;       // Intra-field only correction
         DecoderType decoder = DecoderType::Auto;
+
+        // Path to the ONNX model file used by neural-network decoders.
+        // Required when decoder is NnTransform3D (or any future NN decoder).
+        std::string nnModelPath;
     };
+
+    // True if the given decoder uses neural-network inference and therefore
+    // requires nnModelPath to be set in Configuration.
+    static bool isNeuralDecoder(DecoderType decoder);
 
     // Parse decoder name string (as used by ld-chroma-decoder CLI)
     // Returns Auto if the name is not recognized
