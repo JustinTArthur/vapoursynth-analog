@@ -500,7 +500,20 @@ jobs:
       - name: Install vcpkg dependencies
         run: |
           vcpkg integrate install
-          vcpkg install fftw3:x64-windows sqlite3:x64-windows onnxruntime:x64-windows
+          vcpkg install fftw3:x64-windows sqlite3:x64-windows
+
+      - name: Install ONNX Runtime
+        # Microsoft's prebuilt is downloaded directly rather than installed
+        # via vcpkg because the vcpkg port compiles ORT from source (45+
+        # min on Windows runners). The prebuilt is bit-for-bit what we use
+        # on Linux already.
+        shell: pwsh
+        run: |
+          $ORT_VERSION = "1.23.2"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-win-x64-$ORT_VERSION.zip"
+          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
+          Expand-Archive onnxruntime.zip -DestinationPath C:\
+          Move-Item "C:\onnxruntime-win-x64-$ORT_VERSION" C:\onnxruntime
 
       - name: Download VapourSynth SDK
         shell: pwsh
@@ -560,9 +573,10 @@ jobs:
           "@
           $sqliteContent | Out-File -FilePath "$pkgConfigDir/sqlite3.pc" -Encoding ASCII -NoNewline
 
-          # ONNX Runtime
+          # ONNX Runtime (Microsoft prebuilt at C:/onnxruntime — headers live
+          # directly under include/ in that layout, unlike vcpkg's include/onnxruntime/)
           $ortContent = @"
-          prefix=C:/vcpkg/installed/x64-windows
+          prefix=C:/onnxruntime
           exec_prefix=`${prefix}
           libdir=`${prefix}/lib
           includedir=`${prefix}/include
@@ -571,7 +585,7 @@ jobs:
           Description: ONNX Runtime
           Version: 1.23.2
           Libs: -L`${libdir} -lonnxruntime
-          Cflags: -I`${includedir} -I`${includedir}/onnxruntime
+          Cflags: -I`${includedir}
           "@
           $ortContent | Out-File -FilePath "$pkgConfigDir/libonnxruntime.pc" -Encoding ASCII -NoNewline
 
@@ -622,7 +636,7 @@ jobs:
           # vsanalog.dll lives outside any Python package this wheel owns, so
           # delvewheel needs --analyze-existing to inspect it; --namespace-pkg
           # keeps it from minting __init__.py files inside vapoursynth/.
-          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin" $wheel -w wheelhouse/
+          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin;C:/onnxruntime/lib" $wheel -w wheelhouse/
           python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
       - name: Upload wheel
