@@ -1,3 +1,3 @@
-[submodule "extern/ld-decode-tools"]
-	path = extern/ld-decode-tools
+[submodule "extern/tbc-tools"]
+	path = extern/tbc-tools
 	url = https://github.com/harrypm/tbc-tools.git

@@ -17,7 +17,7 @@
 
 #include <QCoreApplication>
 
-// Ensure Qt is initialized for ld-decode-tools library support.
+// Ensure Qt is initialized for tbc-tools library support.
 // The QCoreApplication is intentionally leaked without storing for explicit
 // deletion. If the plugin is used in a [Py]Qt app like vspreview, destroying
 // ours would crash in ~QCoreApplication if our C++ static destructors run

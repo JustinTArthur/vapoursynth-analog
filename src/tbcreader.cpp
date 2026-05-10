@@ -20,6 +20,8 @@ TbcReader::DecoderType TbcReader::parseDecoderName(const QString &name) {
     if (lower == "ntsc3d") return DecoderType::Ntsc3D;
     if (lower == "ntsc3dnoadapt") return DecoderType::Ntsc3DNoAdapt;
     if (lower == "nntransform3d") return DecoderType::NnTransform3D;
+    if (lower == "ldzeug2_color_cnn") return DecoderType::Ldzeug2ColorCnn;
+    if (lower == "ldzeug2_luma_sep") return DecoderType::Ldzeug2LumaSep;
     if (lower == "pal2d") return DecoderType::Pal2D;
     if (lower == "transform2d") return DecoderType::Transform2D;
     if (lower == "transform3d") return DecoderType::Transform3D;
@@ -30,6 +32,8 @@ TbcReader::DecoderType TbcReader::parseDecoderName(const QString &name) {
 bool TbcReader::isNeuralDecoder(DecoderType decoder) {
     switch (decoder) {
         case DecoderType::NnTransform3D:
+        case DecoderType::Ldzeug2ColorCnn:
+        case DecoderType::Ldzeug2LumaSep:
             return true;
         default:
             return false;
@@ -160,28 +164,36 @@ bool TbcReader::configureDecoder() {
             }
             break;
         case DecoderType::NnTransform3D:
+        case DecoderType::Ldzeug2ColorCnn:
+        case DecoderType::Ldzeug2LumaSep: {
             // Neural decoders are trained on a specific signal: NTSC composite
             // at 4fsc with NTSC-style chroma encoding. PAL and PAL-M have a
             // different chroma modulation scheme (alternating phase per line),
             // so the model can't separate Y/C correctly there. Reject rather
             // than silently fall back.
+            const char *decoderName =
+                decoder == DecoderType::NnTransform3D ? "nnTransform3D" :
+                decoder == DecoderType::Ldzeug2ColorCnn ? "ldzeug2_color_cnn" :
+                "ldzeug2_luma_sep";
             if (videoParameters.system != NTSC) {
                 lastError = QStringLiteral(
-                    "nnTransform3D decoder requires an NTSC source; "
-                    "this capture's video system is %1"
-                ).arg(videoParameters.system == PAL
+                    "%1 decoder requires an NTSC source; "
+                    "this capture's video system is %2"
+                ).arg(QString::fromLatin1(decoderName),
+                      videoParameters.system == PAL
                           ? QStringLiteral("PAL")
                           : QStringLiteral("PAL_M"));
                 return false;
             }
             if (config.nnModelPath.empty()) {
                 lastError = QStringLiteral(
-                    "nnTransform3D decoder requires a model file path "
+                    "%1 decoder requires a model file path "
                     "(set via the model_version or model_path argument)"
-                );
+                ).arg(QString::fromLatin1(decoderName));
                 return false;
             }
             break;
+        }
         case DecoderType::Pal2D:
         case DecoderType::Transform2D:
         case DecoderType::Transform3D:
@@ -300,6 +312,48 @@ bool TbcReader::configureDecoder() {
             lookAhead = 0;
             qInfo() << "Using Mono decoder"
                     << "yNR:" << monoConfig.yNRLevel;
+            break;
+        }
+
+        case DecoderType::Ldzeug2ColorCnn: {
+            ldzeugColorCnn = std::make_unique<LdzeugColorCnnDecoder>();
+            ldzeugColorCnn->setChromaPhase(config.chromaPhase);
+            ldzeugColorCnn->setChromaGain(config.chromaGain);
+            try {
+                ldzeugColorCnn->configure(
+                    videoParameters,
+                    QString::fromStdString(config.nnModelPath));
+            } catch (const std::exception &e) {
+                lastError = QStringLiteral(
+                    "ldzeug2_color_cnn: failed to load ONNX model: %1")
+                    .arg(QString::fromUtf8(e.what()));
+                return false;
+            }
+            lookBehind = 0;
+            lookAhead = 0;
+            qInfo() << "Using ldzeug2_color_cnn decoder"
+                    << "chromaPhase:" << config.chromaPhase
+                    << "chromaGain:" << config.chromaGain;
+            break;
+        }
+
+        case DecoderType::Ldzeug2LumaSep: {
+            ldzeugLumaSep = std::make_unique<LdzeugLumaSepDecoder>();
+            const QString modelPath = QString::fromStdString(config.nnModelPath);
+            ldzeugLumaSep->setMode(lumaSepModeFromModelPath(modelPath));
+            try {
+                ldzeugLumaSep->configure(videoParameters, modelPath);
+            } catch (const std::exception &e) {
+                lastError = QStringLiteral(
+                    "ldzeug2_luma_sep: failed to load ONNX model: %1")
+                    .arg(QString::fromUtf8(e.what()));
+                return false;
+            }
+            lookBehind = 0;
+            lookAhead = 0;
+            qInfo() << "Using ldzeug2_luma_sep decoder (mode:"
+                    << (ldzeugLumaSep->getLookBehind() == 0 ? "field/frame" : "?")
+                    << ")";
             break;
         }
 
@@ -604,6 +658,26 @@ bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame,
 
         case DecoderType::Mono:
             monoDecoder->decodeFrames(fields, startIndex, endIndex, componentFrames);
+            break;
+
+        case DecoderType::Ldzeug2ColorCnn:
+            try {
+                ldzeugColorCnn->decodeFrames(fields, startIndex, endIndex, componentFrames);
+            } catch (const std::exception &e) {
+                lastError = QStringLiteral("ldzeug2_color_cnn decode failed: %1")
+                                .arg(QString::fromUtf8(e.what()));
+                return false;
+            }
+            break;
+
+        case DecoderType::Ldzeug2LumaSep:
+            try {
+                ldzeugLumaSep->decodeFrames(fields, startIndex, endIndex, componentFrames);
+            } catch (const std::exception &e) {
+                lastError = QStringLiteral("ldzeug2_luma_sep decode failed: %1")
+                                .arg(QString::fromUtf8(e.what()));
+                return false;
+            }
             break;
 
         case DecoderType::Auto:

@@ -44,12 +44,30 @@ _NN_DECODERS: dict[str, dict[str, Path]] = {
         "v1": _MODELS_DIR / "nntransform3d_v1.onnx",
         "v2": _MODELS_DIR / "nntransform3d_v2.onnx",
     },
+    # ldzeug2 luma-only separator. NN replaces step 1 of the NTSC decode
+    # chain (Y/C separation); chroma is recovered as ``CVBS - luma`` and
+    # passed through a 2D analytical comb downstream. ``field`` weights
+    # are trained on per-field gray, ``frame`` weights on weaved frames.
+    "ldzeug2_luma_sep": {
+        "field": _MODELS_DIR / "ldzeug2_luma_sep_field.onnx",
+        "frame": _MODELS_DIR / "ldzeug2_luma_sep_frame.onnx",
+    },
+    # ldzeug2 joint Y/C separator + chroma demodulator. NN takes
+    # ``[CVBS, I-carrier, Q-carrier]`` and emits ``[Y, I, Q]`` directly,
+    # replacing steps 1+2 of the NTSC chain. No comb runs downstream.
+    "ldzeug2_color_cnn": {
+        "v1": _MODELS_DIR / "ldzeug2_color_cnn_v1.onnx",
+        "v1_denoise": _MODELS_DIR / "ldzeug2_color_cnn_v1_denoise.onnx",
+        "v2": _MODELS_DIR / "ldzeug2_color_cnn_v2.onnx",
+    },
 }
 
 # Default model version for each NN decoder when the caller doesn't specify
 # one. Newer/faster releases win the default.
 _NN_DECODER_DEFAULT_VERSION: dict[str, str] = {
     "nntransform3d": "v2",
+    "ldzeug2_luma_sep": "field",
+    "ldzeug2_color_cnn": "v2",
 }
 
 
@@ -149,7 +167,8 @@ def decode_4fsc_video(
     Reads time-base corrected (TBC) captures produced by ld-decode or vhs-decode
     and returns a VapourSynth clip in YUV444PS or GRAYS format (32-bit float).
 
-    Neural-network decoders (e.g. ``decoder="nntransform3d"``) require either
+    Neural-network decoders (``decoder="nntransform3d"``,
+    ``"ldzeug2_luma_sep"``, ``"ldzeug2_color_cnn"``) require either
     ``model_version`` to select a bundled model or ``model_path`` to point at
     a custom ONNX file. Such decoders are NTSC-only — PAL and PAL-M sources
     will be rejected.
@@ -160,10 +179,10 @@ def decode_4fsc_video(
     is_nn_decoder = decoder_lower in _NN_DECODERS
 
     if not is_nn_decoder and (model_version is not None or model_path is not None):
+        valid = ", ".join(sorted(_NN_DECODERS))
         raise ValueError(
             "model_version and model_path are only meaningful for "
-            "neural-network decoders (e.g. nntransform3d); set decoder= "
-            "first."
+            f"neural-network decoders ({valid}); set decoder= first."
         )
     if is_nn_decoder:
         kwargs["nn_model_path"] = _resolve_nn_model_path(

@@ -14,8 +14,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Initialize tbc-tools submodule (shallow + sparse)
+        shell: bash
+        run: tools/init_submodule_sparse.sh
 
       - name: Install dependencies
         run: |
@@ -179,8 +181,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Initialize tbc-tools submodule (shallow + sparse)
+        shell: bash
+        run: tools/init_submodule_sparse.sh
 
       - name: Install dependencies
         run: |
@@ -330,8 +334,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Initialize tbc-tools submodule (shallow + sparse)
+        shell: bash
+        run: tools/init_submodule_sparse.sh
 
       - name: Install dependencies
         run: |
@@ -392,8 +398,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Initialize tbc-tools submodule (shallow + sparse)
+        shell: bash
+        run: tools/init_submodule_sparse.sh
 
       - name: Install dependencies
         run: |
@@ -454,8 +462,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Initialize tbc-tools submodule (shallow + sparse)
+        shell: bash
+        run: tools/init_submodule_sparse.sh
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1

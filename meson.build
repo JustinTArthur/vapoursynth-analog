@@ -1,5 +1,5 @@
 project('vapoursynth-analog', 'cpp',
-    version : '0.3.0',
+    version : '0.3.0a1',
     default_options : [
         'buildtype=release',
         'cpp_std=c++20',
@@ -14,12 +14,12 @@ project('vapoursynth-analog', 'cpp',
 # VapourSynth
 vapoursynth_dep = dependency('vapoursynth', version: '>=55')
 
-# Qt6 Core (required by ld-decode-tools)
+# Qt6 Core (required by tbc-tools)
 # Note: We use sqlite3 C API directly instead of Qt SQL to avoid symbol conflicts with PyQt
 qt6 = import('qt6')
 qt6_dep = dependency('qt6', modules: ['Core'], required: true, method: 'config-tool')
 
-# FFTW3 (required by ld-decode-tools chroma decoders)
+# FFTW3 (required by tbc-tools chroma decoders)
 fftw3_dep = dependency('fftw3', required: true)
 
 # SQLite3 (for metadata database access without Qt SQL)
@@ -55,15 +55,15 @@ else
 endif
 
 # =====================
-# ld-decode-tools library paths (relative)
+# tbc-tools library paths (relative)
 # =====================
 
-ld_tools_rel = 'extern' / 'ld-decode-tools'
-ld_library_rel = ld_tools_rel / 'src' / 'library'
-ld_chroma_rel = ld_tools_rel / 'src' / 'ld-chroma-decoder'
+tbc_tools_rel = 'extern' / 'tbc-tools'
+ld_library_rel = tbc_tools_rel / 'src' / 'library'
+ld_chroma_rel = tbc_tools_rel / 'src' / 'ld-chroma-decoder'
 
 # Absolute paths for file() calls
-ld_tools_dir = meson.current_source_dir() / ld_tools_rel
+tbc_tools_dir = meson.current_source_dir() / tbc_tools_rel
 ld_library_dir = meson.current_source_dir() / ld_library_rel
 ld_chroma_dir = meson.current_source_dir() / ld_chroma_rel
 
@@ -76,10 +76,20 @@ py3_patch = import('python').find_installation('python3', required: true)
 patch_result = run_command(
     py3_patch,
     meson.current_source_dir() / 'tools' / 'patch_tbc_tools.py',
-    ld_tools_dir,
+    tbc_tools_dir,
     check: true,
 )
 message(patch_result.stdout().strip())
+
+# `meson dist` (used by `python -m build --sdist`) doesn't recurse into git
+# submodules. Without this hook the sdist would be missing the tbc-tools
+# C++ sources entirely. The script copies a curated subset of the
+# submodule into the dist tarball, deliberately skipping ci/cache/ so the
+# upstream fork's multi-GB Windows vcpkg binary cache stays out of PyPI.
+meson.add_dist_script(
+    py3_patch,
+    meson.current_source_dir() / 'tools' / 'sdist_include_submodule.py',
+)
 
 # =====================
 # ld-decode TBC library (lddecode-library)
@@ -101,7 +111,7 @@ lddecode_library_sources = files(
     ld_library_rel / 'tbc' / 'vitcdecoder.cpp',
 )
 
-# Stub directory for our sqliteio.h replacement (must come before ld-decode-tools includes)
+# Stub directory for our sqliteio.h replacement (must come before tbc-tools includes)
 stubs_inc = include_directories('src/stubs')
 
 lddecode_library_inc = include_directories(
@@ -120,11 +130,11 @@ lddecode_library_moc = qt6.compile_moc(
     method: 'config-tool'
 )
 
-# Get git info for ld-decode-tools version macros
+# Get git info for tbc-tools version macros
 git_prog = find_program('git', required: false)
 if git_prog.found()
-    git_branch = run_command(git_prog, '-C', ld_tools_dir, 'rev-parse', '--abbrev-ref', 'HEAD', check: false)
-    git_commit = run_command(git_prog, '-C', ld_tools_dir, 'log', '-1', '--format=%h', check: false)
+    git_branch = run_command(git_prog, '-C', tbc_tools_dir, 'rev-parse', '--abbrev-ref', 'HEAD', check: false)
+    git_commit = run_command(git_prog, '-C', tbc_tools_dir, 'log', '-1', '--format=%h', check: false)
     app_branch = git_branch.returncode() == 0 ? git_branch.stdout().strip() : 'unknown'
     app_commit = git_commit.returncode() == 0 ? git_commit.stdout().strip() : 'unknown'
 else
@@ -232,6 +242,7 @@ vsanalog_sources = files(
     'src/dropoutcorrector.cpp',
     'src/jsonconverter_wrapper.cpp',
     'src/sqlite3_metadata_reader.cpp',
+    'src/ldzeug_decoders.cpp',
 )
 
 vsanalog_inc = include_directories('src')
@@ -267,6 +278,7 @@ shared_library(
         sqlite3_dep,
         lddecode_library_dep,
         lddecode_chroma_dep,
+        onnxruntime_dep,
     ],
     install: true,
     install_dir: plugin_install_dir,

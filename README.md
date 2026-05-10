@@ -71,7 +71,7 @@ detelecined = field_matched.vivtc.VDecimate()
 |-------------|--------------------------------------------------------------------------------------------------|
 | `src/`      | C++ VapourSynth plugin source (plugin entrypoint, TBC (incl. chroma) decode, dropout correction) |
 | `python/`   | Python package (`vsanalog`) with type-hinted wrapper and PyInstaller hooks                       |
-| `extern/`   | Git submodules (`ld-decode-tools`)                                                               |
+| `extern/`   | Git submodules (`tbc-tools`)                                                                     |
 | `docs/`     | Sphinx documentation source                                                                      |
 
 ## Installing
@@ -108,9 +108,12 @@ composite video separation/transformation decode processes, which would have
 been hard to replicate. The fork also brings the
 [nnTransform3D](https://github.com/oyvindln/vhs-decode/discussions) neural
 network 3D Y/C separator that ships with vapoursynth-analog as the
-`nntransform3d` decoder option.
+`nntransform3d` decoder option. We also bundle jsaowji’s
+[ldzeug2](https://github.com/jsaowji/ldzeug2) Y/C-separation and combined
+Y/C-separation+demodulation models, surfaced as the `ldzeug2_luma_sep` and
+`ldzeug2_color_cnn` decoders.
 
-Using ld-decode-tools’ code directly (in a submodule here) forces a few design
+Using tbc-tools’ code directly (in a submodule here) forces a few design
 decisions:
 * To ease legal distribution of this plugin, I must make this project available
   under the GPL 3 license or one that’s compatible.
@@ -132,7 +135,7 @@ components together.
   components—something that vapoursynth-analog doesn’t have. It moves more
   4𝑓𝑠𝑐 processing to the Python domain for flexible scripting opportunities.
   It focuses on composite NTSC, ST 170, and Japan format signals.
-* ld-decode-tools comes with an `ld-chroma-decoder` tool to decode TBC
+* tbc-tools comes with an `ld-chroma-decoder` tool to decode TBC
   files to component R′G′B′ or Y′Cb′Cr′ stream output for use in command line
   workflows and an `ld-dropout-correct` tool for generating a pre-corrected
   intermediate based on upstream dropout detection.

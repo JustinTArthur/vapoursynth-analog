@@ -183,7 +183,7 @@ Dropout Correction
 ^^^^^^^^^^^^^^^^^^
 Setting ``dropout_correct=1`` replaces signal dropout regions identified in the
 TBC metadata with data from nearby clean lines, based on the algorithm from
-`ld-decode-tools <https://github.com/simoninns/ld-decode-tools>`_'
+`tbc-tools <https://github.com/harrypm/tbc-tools>`_'
 ld-dropout-correct. Luma and chroma are sourced independently using FIR
 frequency separation to find the closest match for each.
 

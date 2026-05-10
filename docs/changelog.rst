@@ -1,8 +1,8 @@
 Changelog
 =========
 
-0.3.0
------
+0.3.0a1
+-------
 - New ``nntransform3d`` decoder option for ``decode_4fsc_video``: an
   NTSC-only 3D adaptive comb that substitutes neural-network inference
   for the analytical FFT-based Y/C separation step. Two model versions
@@ -10,6 +10,14 @@ Changelog
   pick one with ``model_version=`` or supply your own weights via
   ``model_path=``. PAL and PAL-M sources are rejected for this decoder
   because the model was trained on NTSC chroma encoding only.
+- New ``ldzeug2_luma_sep`` and ``ldzeug2_color_cnn`` decoders, NTSC-only,
+  derived from jsaowji's `ldzeug2
+  <https://github.com/jsaowji/ldzeug2>`_ models. ``ldzeug2_luma_sep``
+  performs neural Y/C separation only (``model_version="field"|"frame"``)
+  with downstream comb demodulation; ``ldzeug2_color_cnn``
+  (``model_version="v1"|"v1_denoise"|"v2"``) performs joint NN
+  separation and chroma demodulation in one pass, replacing the comb
+  entirely. All five weights ship in the wheel.
 - Switched the bundled signal-decoder submodule from
   ``simoninns/ld-decode-tools`` to the active
   ``harrypm/tbc-tools`` fork. Older JSON and SQLite metadata sidecar

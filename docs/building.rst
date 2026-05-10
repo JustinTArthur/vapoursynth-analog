@@ -114,8 +114,8 @@ Install the front end once:
 
 Source Distribution (sdist)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-An sdist bundles the source tree (including the ld-decode-tools submodule) and
-is platform independent. Make sure submodules are checked out, then:
+An sdist bundles the source tree (including the tbc-tools submodule sources)
+and is platform independent. Make sure submodules are checked out, then:
 
 .. code-block:: bash
 

@@ -22,8 +22,9 @@
 #include "palcolour.h"
 #include "monodecoder.h"
 #include "dropoutcorrector.h"
+#include "ldzeug_decoders.h"
 
-// TBC file reader that wraps ld-decode-tools' TBC library
+// TBC file reader that wraps tbc-tools' TBC library
 class TbcReader {
 public:
     // Decoder types matching ld-chroma-decoder command line options
@@ -36,6 +37,12 @@ public:
         // NTSC neural-network decoders (use Comb filter with NN-based Y/C separation)
         // NTSC-only: rejects PAL and PAL-M sources at decoder configuration time.
         NnTransform3D,
+        // ldzeug2 NN decoders. NTSC-only. Bypass Comb entirely.
+        // ldzeug2_color_cnn replaces Y/C separation + chroma demod in one
+        // inference; ldzeug2_luma_sep does Y/C separation only (chroma
+        // demod is currently unimplemented — output is luma-only).
+        Ldzeug2ColorCnn,
+        Ldzeug2LumaSep,
         // PAL decoders (use PalColour)
         Pal2D,
         Transform2D,
@@ -140,9 +147,11 @@ private:
     qint32 primaryMaxVbiFrame = 0;
 
     // Decoders - only one will be active at a time
-    std::unique_ptr<Comb> combFilter;          // For NTSC
-    std::unique_ptr<PalColour> palColour;      // For PAL
-    std::unique_ptr<MonoDecoder> monoDecoder;  // For mono
+    std::unique_ptr<Comb> combFilter;                          // For NTSC
+    std::unique_ptr<PalColour> palColour;                      // For PAL
+    std::unique_ptr<MonoDecoder> monoDecoder;                  // For mono
+    std::unique_ptr<LdzeugColorCnnDecoder> ldzeugColorCnn;     // For ldzeug2_color_cnn
+    std::unique_ptr<LdzeugLumaSepDecoder> ldzeugLumaSep;       // For ldzeug2_luma_sep
 
     DecoderType activeDecoder = DecoderType::Auto;
     LdDecodeMetaData::VideoParameters videoParameters;
