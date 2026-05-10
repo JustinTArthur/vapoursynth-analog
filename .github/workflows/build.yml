@@ -3,7 +3,8 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    # Trailing * permits PEP 440 prerelease/dev suffixes (a1, b2, rc1, .dev3).
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
   pull_request:
     branches: [main]
   workflow_dispatch:
