@@ -7,6 +7,7 @@
 
 #include "ldzeug_decoders.h"
 
+#include <QDebug>
 #include <QFile>
 #include <array>
 #include <cmath>
@@ -28,6 +29,17 @@ Ort::SessionOptions makeSessionOptions() {
     opts.SetIntraOpNumThreads(1);
     opts.SetInterOpNumThreads(1);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+    // Prefer CoreML on macOS, targeting all compute units (CPU/GPU/ANE).
+    // Default MLComputeUnits is CPUOnly, which is no faster than the CPU EP.
+#if defined(__APPLE__)
+    try {
+        opts.AppendExecutionProvider("CoreML", {{"MLComputeUnits", "ALL"}, {"ModelFormat", "MLProgram"}});
+        qInfo() << "ldzeug decoder: requested CoreML execution provider (units: ALL)";
+    } catch (const std::exception &e) {
+        qWarning() << "ldzeug decoder: CoreML EP unavailable:" << e.what();
+    }
+#endif
     return opts;
 }
 

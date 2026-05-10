@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Idempotently patch the tbc-tools submodule for vapoursynth-analog.
 
-Two changes are required against harrypm/tbc-tools' ld-chroma-decoder:
+Three changes are required against harrypm/tbc-tools' ld-chroma-decoder:
 
 1. Add a ``QString nnModelPath`` field to ``Comb::Configuration``. This lets us
    feed the ONNX model path through at runtime instead of relying on the
@@ -13,8 +13,10 @@ Two changes are required against harrypm/tbc-tools' ld-chroma-decoder:
    the build defines ``VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB``. We don't
    generate the blob at all by default so the fallback would error out cleanly
    if reached.
+3. Try the CoreML execution provider before falling back to CPU on macOS.
 
-Idempotent: re-running on already-patched files is a no-op.
+Each sub-patch checks for its own anchor and is independently idempotent;
+re-running on already-patched files is a no-op.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ import sys
 from pathlib import Path
 
 PATCH_MARKER = "// vsanalog-nn-model-path-patch"
+COREML_MARKER = "// vsanalog-coreml-patch"
 
 
 def patch_comb_h(path: Path) -> bool:
@@ -48,10 +51,9 @@ def patch_comb_h(path: Path) -> bool:
     return True
 
 
-def patch_comb_cpp(path: Path) -> bool:
-    text = path.read_text()
+def patch_comb_cpp_model_path(text: str) -> tuple[str, bool]:
     if PATCH_MARKER in text:
-        return False
+        return text, False
 
     # 1) Make the embedded-blob include conditional.
     old_include = '#include "chroma_net_v2_onnx_data.h"'
@@ -121,12 +123,59 @@ def patch_comb_cpp(path: Path) -> bool:
     )
     if old_session not in text:
         raise RuntimeError(
-            f"comb.cpp: anchor for byte-blob session creation not found in {path}"
+            "comb.cpp: anchor for byte-blob session creation not found"
         )
     text = text.replace(old_session, new_session, 1)
 
-    path.write_text(text)
-    return True
+    return text, True
+
+
+def patch_comb_cpp_coreml(text: str) -> tuple[str, bool]:
+    if COREML_MARKER in text:
+        return text, False
+
+    old_block = (
+        "            if (!onnxReady) {\n"
+        "                Ort::SessionOptions cpuOptions;\n"
+        "                configureSessionOptions(cpuOptions);\n"
+        "                tryCreateSession(cpuOptions, QStringLiteral(\"CPU\"));\n"
+        "            }"
+    )
+    new_block = (
+        "            // " + COREML_MARKER + "\n"
+        "#if defined(__APPLE__)\n"
+        "            if (!onnxReady) {\n"
+        "                Ort::SessionOptions coremlOptions;\n"
+        "                configureSessionOptions(coremlOptions);\n"
+        "                try {\n"
+        "                    coremlOptions.AppendExecutionProvider(\"CoreML\", {{\"MLComputeUnits\", \"ALL\"}, {\"ModelFormat\", \"MLProgram\"}});\n"
+        "                    tryCreateSession(coremlOptions, QStringLiteral(\"CoreML\"));\n"
+        "                } catch (const std::exception &vsCoreMLErr) {\n"
+        "                    qWarning() << \"nnTransform3D CoreML EP unavailable:\"\n"
+        "                               << vsCoreMLErr.what();\n"
+        "                }\n"
+        "            }\n"
+        "#endif\n"
+        "            if (!onnxReady) {\n"
+        "                Ort::SessionOptions cpuOptions;\n"
+        "                configureSessionOptions(cpuOptions);\n"
+        "                tryCreateSession(cpuOptions, QStringLiteral(\"CPU\"));\n"
+        "            }"
+    )
+    if old_block not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for CPU fallback block not found"
+        )
+    return text.replace(old_block, new_block, 1), True
+
+
+def patch_comb_cpp(path: Path) -> bool:
+    text = path.read_text()
+    text, changed_mp = patch_comb_cpp_model_path(text)
+    text, changed_cm = patch_comb_cpp_coreml(text)
+    if changed_mp or changed_cm:
+        path.write_text(text)
+    return changed_mp or changed_cm
 
 
 def main(argv: list[str]) -> int:

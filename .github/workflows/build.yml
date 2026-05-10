@@ -169,6 +169,10 @@ jobs:
           python3 -m build --wheel --no-isolation -o /tmp/dist/
           auditwheel repair --plat manylinux_2_28_x86_64 -w /wheelhouse/ /tmp/dist/*.whl
           python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
+          # ORT loads CUDA/TRT providers via dlopen against providers_shared; bundle it.
+          for w in /wheelhouse/*.whl; do
+              python3 tools/inject_providers_shared.py "$w" /opt/onnxruntime/lib/libonnxruntime_providers_shared.so
+          done
           '
 
       - name: Upload wheel
@@ -322,6 +326,9 @@ jobs:
           python3 -m build --wheel --no-isolation -o /tmp/dist/
           auditwheel repair --plat manylinux_2_34_aarch64 -w /wheelhouse/ /tmp/dist/*.whl
           python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
+          for w in /wheelhouse/*.whl; do
+              python3 tools/inject_providers_shared.py "$w" /opt/onnxruntime/lib/libonnxruntime_providers_shared.so
+          done
           '
 
       - name: Upload wheel
@@ -636,7 +643,8 @@ jobs:
           # vsanalog.dll lives outside any Python package this wheel owns, so
           # delvewheel needs --analyze-existing to inspect it; --namespace-pkg
           # keeps it from minting __init__.py files inside vapoursynth/.
-          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin;C:/onnxruntime/lib" $wheel -w wheelhouse/
+          # --add-dll forces inclusion of providers_shared, which ORT loads via dynamic discovery for CUDA/TRT providers.
+          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-dll "onnxruntime_providers_shared.dll" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin;C:/onnxruntime/lib" $wheel -w wheelhouse/
           python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
       - name: Upload wheel
