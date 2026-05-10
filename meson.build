@@ -37,6 +37,13 @@ sqlite3_dep = dependency('sqlite3', required: true)
 # happens to ship. Windows resolves through vcpkg's pkg-config.
 onnxruntime_dep = dependency('libonnxruntime', required: true)
 
+# tbc-tools' comb.cpp uses dlopen/dlsym/dladdr to lazily probe for the CUDA
+# execution provider at runtime. On glibc < 2.34 (e.g. manylinux_2_28) those
+# live in libdl.so.2 rather than libc, so we must link it explicitly. No-op
+# on macOS and Windows.
+cpp_compiler = meson.get_compiler('cpp')
+dl_dep = cpp_compiler.find_library('dl', required: false)
+
 # =====================
 # tbc-tools library paths (relative)
 # =====================
@@ -196,7 +203,7 @@ lddecode_chroma_moc = qt6.compile_moc(
     method: 'config-tool'
 )
 
-lddecode_chroma_deps = [qt6_dep, fftw3_dep, lddecode_library_dep, onnxruntime_dep]
+lddecode_chroma_deps = [qt6_dep, fftw3_dep, lddecode_library_dep, onnxruntime_dep, dl_dep]
 
 lddecode_chroma = static_library(
     'lddecode-chroma',

@@ -25,10 +25,13 @@ git -c "submodule.${SUBMODULE}.shallow=true" \
     "${SUBMODULE}"
 
 # Restrict the working tree to just the source code our build needs.
-# /src/ holds ld-chroma-decoder + library/tbc that meson compiles. /LICENSE
-# travels with the source per GPL.
-git -C "${SUBMODULE}" sparse-checkout init --no-cone
-git -C "${SUBMODULE}" sparse-checkout set '/src/' '/LICENSE'
+# Cone mode is used because non-cone gitignore-style patterns matched
+# nothing on Windows Git Bash in CI, leaving the working tree empty.
+# Cone mode auto-includes top-level files (so LICENSE travels for free)
+# plus the listed directories; ci/, prototypes/, docs/, etc. stay excluded
+# because they aren't named.
+git -C "${SUBMODULE}" sparse-checkout init --cone
+git -C "${SUBMODULE}" sparse-checkout set src
 
 echo "Submodule ${SUBMODULE} initialized:"
 echo "  HEAD: $(git -C "${SUBMODULE}" rev-parse HEAD)"
