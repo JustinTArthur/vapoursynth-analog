@@ -74,10 +74,10 @@ jobs:
 
       - name: Build
         run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
+          meson setup build --buildtype=release
           meson compile -C build
         env:
+          PKG_CONFIG_PATH: /opt/onnxruntime/lib/pkgconfig
           LD_LIBRARY_PATH: /opt/onnxruntime/lib
 
       - name: Package tarball
@@ -97,7 +97,7 @@ jobs:
       - name: Build sdist
         run: pipx run build --sdist -o dist/
         env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
+          PKG_CONFIG_PATH: /opt/onnxruntime/lib/pkgconfig
 
       - name: Upload sdist
         uses: actions/upload-artifact@v6
@@ -143,7 +143,7 @@ jobs:
             --outputdir /opt/qt --archives qtbase icu
           QT_PREFIX="/opt/qt/6.8.3/gcc_64"
           export PATH="${QT_PREFIX}/bin:${PATH}"
-          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
+          export PKG_CONFIG_PATH="/opt/onnxruntime/lib/pkgconfig"
           export LD_LIBRARY_PATH="${QT_PREFIX}/lib:/opt/onnxruntime/lib"
 
           mkdir -p /usr/include/vapoursynth
@@ -241,10 +241,10 @@ jobs:
 
       - name: Build
         run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
+          meson setup build --buildtype=release
           meson compile -C build
         env:
+          PKG_CONFIG_PATH: /opt/onnxruntime/lib/pkgconfig
           LD_LIBRARY_PATH: /opt/onnxruntime/lib
 
       - name: Package tarball
@@ -296,7 +296,7 @@ jobs:
             --outputdir /opt/qt --archives qtbase icu
           QT_PREFIX="/opt/qt/6.7.3/gcc_arm64"
           export PATH="${QT_PREFIX}/bin:${PATH}"
-          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig:/opt/onnxruntime/lib/pkgconfig"
+          export PKG_CONFIG_PATH="/opt/onnxruntime/lib/pkgconfig"
           export LD_LIBRARY_PATH="${QT_PREFIX}/lib:/opt/onnxruntime/lib"
 
           mkdir -p /usr/include/vapoursynth
@@ -344,6 +344,9 @@ jobs:
         run: |
           brew install meson fftw sqlite vapoursynth onnxruntime
 
+      - name: Patch homebrew onnxruntime SOVERSION
+        run: tools/patch_brew_onnxruntime.sh
+
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
@@ -353,8 +356,7 @@ jobs:
 
       - name: Build
         run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+          meson setup build --buildtype=release
           meson compile -C build
 
       - name: Package tarball
@@ -382,11 +384,12 @@ jobs:
         run: |
           pip install delocate wheel
           pipx run build --wheel -o dist/
-          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
+          # delocate-wheel resolves @rpath refs against DYLD_LIBRARY_PATH
+          # before checking standard locations. Qt lives in the runner workspace
+          # and brew's onnxruntime path holds libonnxruntime.1.dylib (post-patch).
+          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib:$(brew --prefix onnxruntime)/lib" \
             delocate-wheel -w wheelhouse/ dist/*.whl
           python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
-        env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
@@ -408,6 +411,9 @@ jobs:
         run: |
           brew install meson fftw sqlite vapoursynth onnxruntime
 
+      - name: Patch homebrew onnxruntime SOVERSION
+        run: tools/patch_brew_onnxruntime.sh
+
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
@@ -417,8 +423,7 @@ jobs:
 
       - name: Build
         run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+          meson setup build --buildtype=release
           meson compile -C build
 
       - name: Package tarball
@@ -446,11 +451,12 @@ jobs:
         run: |
           pip install delocate wheel
           pipx run build --wheel -o dist/
-          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
+          # delocate-wheel resolves @rpath refs against DYLD_LIBRARY_PATH
+          # before checking standard locations. Qt lives in the runner workspace
+          # and brew's onnxruntime path holds libonnxruntime.1.dylib (post-patch).
+          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib:$(brew --prefix onnxruntime)/lib" \
             delocate-wheel -w wheelhouse/ dist/*.whl
           python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
-        env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
 
       - name: Upload wheel
         uses: actions/upload-artifact@v6
@@ -572,7 +578,7 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
 
           meson setup build --buildtype=release `
@@ -608,7 +614,7 @@ jobs:
       - name: Build wheel
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
           pip install delvewheel wheel
           pipx run build --wheel -o dist/

@@ -29,30 +29,13 @@ sqlite3_dep = dependency('sqlite3', required: true)
 # ONNX Runtime (required; tbc-tools' chroma decoder uses ORT
 # unconditionally outside its CUDA block, so we always link against it)
 # =====================
-# On macOS we always stage a renamed copy of the dylib (with @rpath install_name)
-# so our binary references @rpath/libonnxruntime.1.dylib instead of the
-# version-pinned absolute path Homebrew bakes in. This makes the wheel work
-# with any compatible 1.x ORT delocate-wheel happens to bundle. Other
-# platforms can rely on the system pkg-config / loader chain directly.
-if host_machine.system() == 'darwin'
-    py3_setup = import('python').find_installation('python3', required: true)
-    staging_dir = meson.current_build_dir() / 'onnxruntime-staging'
-    stage_result = run_command(
-        py3_setup,
-        meson.current_source_dir() / 'tools' / 'stage_macos_onnxruntime.py',
-        '--staging', staging_dir,
-        check: true,
-    )
-    message(stage_result.stdout().strip())
-    brew_prefix = run_command('brew', '--prefix', 'onnxruntime', check: true)
-    ort_inc = brew_prefix.stdout().strip() / 'include'
-    onnxruntime_dep = declare_dependency(
-        compile_args: ['-I' + ort_inc, '-I' + ort_inc / 'onnxruntime'],
-        link_args: ['-L' + staging_dir, '-lonnxruntime.1'],
-    )
-else
-    onnxruntime_dep = dependency('libonnxruntime', required: true)
-endif
+# Linux uses the upstream Microsoft prebuilt (.so.1 SOVERSION already correct).
+# macOS uses Homebrew, which historically lacks the .1 SOVERSION symlink and
+# pins install_name to the full .X.Y.Z.dylib filename — CI patches that on the
+# brew tree before invoking meson so the binary winds up referencing
+# @rpath/libonnxruntime.1.dylib regardless of which 1.x patch version brew
+# happens to ship. Windows resolves through vcpkg's pkg-config.
+onnxruntime_dep = dependency('libonnxruntime', required: true)
 
 # =====================
 # tbc-tools library paths (relative)
