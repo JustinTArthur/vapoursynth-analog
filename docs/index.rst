@@ -15,6 +15,7 @@ Documentation
     installation
     python-api
     plugin-api
+    models
     building
     changelog
 
