@@ -9,15 +9,25 @@ Changelog
   (the original ``v1`` and the newer/faster ``v2``) ship in the wheel;
   pick one with ``model_version=`` or supply your own weights via
   ``model_path=``. PAL and PAL-M sources are rejected for this decoder
-  because the model was trained on NTSC chroma encoding only.
+  because the model was trained on NTSC chroma encoding only. Network
+  design and weights are by **asdfqazsnbb** (the nnTransform3D author);
+  the surrounding ``ld-chroma-decoder`` integration is from
+  `harrypm/tbc-tools <https://github.com/harrypm/tbc-tools>`_.
 - New ``ldzeug2_luma_sep`` and ``ldzeug2_color_cnn`` decoders, NTSC-only,
-  derived from jsaowji's `ldzeug2
-  <https://github.com/jsaowji/ldzeug2>`_ models. ``ldzeug2_luma_sep``
-  performs neural Y/C separation only (``model_version="field"|"frame"``)
-  with downstream comb demodulation; ``ldzeug2_color_cnn``
+  derived from **jsaowji**'s `ldzeug2
+  <https://github.com/jsaowji/ldzeug2>`_ models (weights treated as
+  public domain per the author). ``ldzeug2_luma_sep`` performs neural
+  Y/C separation only (``model_version="field"|"frame"``) with
+  downstream comb demodulation; ``ldzeug2_color_cnn``
   (``model_version="v1"|"v1_denoise"|"v2"``) performs joint NN
   separation and chroma demodulation in one pass, replacing the comb
-  entirely. All five weights ship in the wheel.
+  entirely. All five bundled weights are jsaowji's; see :doc:`/models`
+  for the source-to-bundle filename mapping.
+- New ``onnx_provider=`` argument on ``decode_4fsc_video`` to pin the
+  ONNX Runtime execution provider used by neural decoders
+  (``"auto"``, ``"cpu"``, ``"cuda"`` / ``"gpu"``, ``"migraphx"``,
+  ``"tensorrt"`` / ``"trt"``, ``"coreml"``). On macOS, CoreML is
+  requested automatically when ``onnx_provider`` is not specified.
 - Switched the bundled signal-decoder submodule from
   ``simoninns/ld-decode-tools`` to the active
   ``harrypm/tbc-tools`` fork. Older JSON and SQLite metadata sidecar

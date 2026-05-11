@@ -105,13 +105,12 @@ active fork of
 [ld-decode-tools](https://github.com/simoninns/ld-decode-tools). This was done
 to take advantage of great work already done on those projects including the
 composite video separation/transformation decode processes, which would have
-been hard to replicate. The fork also brings the
-[nnTransform3D](https://github.com/oyvindln/vhs-decode/discussions) neural
-network 3D Y/C separator that ships with vapoursynth-analog as the
-`nntransform3d` decoder option. We also bundle jsaowji’s
-[ldzeug2](https://github.com/jsaowji/ldzeug2) Y/C-separation and combined
-Y/C-separation+demodulation models, surfaced as the `ldzeug2_luma_sep` and
-`ldzeug2_color_cnn` decoders.
+been hard to replicate. The fork also brings the nnTransform3D neural-network
+3D Y/C separator (network design and weights by *asdfqazsnbb*) that ships
+with vapoursynth-analog as the `nntransform3d` decoder option. We also
+bundle jsaowji’s [ldzeug2](https://github.com/jsaowji/ldzeug2) Y/C-separation
+and combined Y/C-separation+demodulation models, surfaced as the
+`ldzeug2_luma_sep` and `ldzeug2_color_cnn` decoders.
 
 Using tbc-tools’ code directly (in a submodule here) forces a few design
 decisions:
