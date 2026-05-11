@@ -25,30 +25,52 @@ from pathlib import Path
 
 PATCH_MARKER = "// vsanalog-nn-model-path-patch"
 COREML_MARKER = "// vsanalog-coreml-patch"
+PROVIDER_MARKER = "// vsanalog-nn-provider-patch"
 
 
 def patch_comb_h(path: Path) -> bool:
     text = path.read_text()
-    if PATCH_MARKER in text:
-        return False
-
-    # Insert ``QString nnModelPath`` into Comb::Configuration.
-    needle = "        qint32 getLookBehind() const;"
-    insertion = (
-        "        " + PATCH_MARKER + "\n"
-        "        // Filesystem path to the ONNX model file used when\n"
-        "        // ``nnTransform3D`` is enabled. When empty, the build's\n"
-        "        // embedded byte blob is used (only available when compiled\n"
-        "        // with ``VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB``).\n"
-        "        QString nnModelPath;\n\n"
-    )
-    if needle not in text:
-        raise RuntimeError(
-            f"comb.h: anchor for nnModelPath insertion not found in {path}"
+    changed = False
+    if PATCH_MARKER not in text:
+        # Insert ``QString nnModelPath`` into Comb::Configuration.
+        needle = "        qint32 getLookBehind() const;"
+        insertion = (
+            "        " + PATCH_MARKER + "\n"
+            "        // Filesystem path to the ONNX model file used when\n"
+            "        // ``nnTransform3D`` is enabled. When empty, the build's\n"
+            "        // embedded byte blob is used (only available when compiled\n"
+            "        // with ``VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB``).\n"
+            "        QString nnModelPath;\n\n"
         )
-    new_text = text.replace(needle, insertion + needle, 1)
-    path.write_text(new_text)
-    return True
+        if needle not in text:
+            raise RuntimeError(
+                f"comb.h: anchor for nnModelPath insertion not found in {path}"
+            )
+        text = text.replace(needle, insertion + needle, 1)
+        changed = True
+
+    if PROVIDER_MARKER not in text:
+        # Insert ``QString nnProvider`` alongside nnModelPath.
+        needle = "        QString nnModelPath;"
+        insertion = (
+            "        QString nnModelPath;\n\n"
+            "        " + PROVIDER_MARKER + "\n"
+            "        // Override for the ONNX execution provider. Empty means\n"
+            "        // honor the LDDECODE_NNTRANSFORM3D_PROVIDER env var; values\n"
+            "        // are matched case-insensitively against \"auto\", \"cpu\",\n"
+            "        // \"cuda\"/\"gpu\", \"coreml\".\n"
+            "        QString nnProvider;"
+        )
+        if needle not in text:
+            raise RuntimeError(
+                f"comb.h: anchor for nnProvider insertion not found in {path}"
+            )
+        text = text.replace(needle, insertion, 1)
+        changed = True
+
+    if changed:
+        path.write_text(text)
+    return changed
 
 
 def patch_comb_cpp_model_path(text: str) -> tuple[str, bool]:
@@ -169,13 +191,63 @@ def patch_comb_cpp_coreml(text: str) -> tuple[str, bool]:
     return text.replace(old_block, new_block, 1), True
 
 
+def patch_comb_cpp_provider_override(text: str) -> tuple[str, bool]:
+    """Allow ``configuration.nnProvider`` to override the env-var-derived
+    provider preference. Also gate our CoreML attempt on the override."""
+    if PROVIDER_MARKER in text:
+        return text, False
+
+    # 1) Drop the ``const`` qualifier off providerPreference and inject the
+    #    override block immediately after it.
+    old_pref = (
+        "            const NnExecutionProviderPreference providerPreference "
+        "= getNnExecutionProviderPreference();"
+    )
+    new_pref = (
+        "            // " + PROVIDER_MARKER + "\n"
+        "            NnExecutionProviderPreference providerPreference "
+        "= getNnExecutionProviderPreference();\n"
+        "            const QString vsCfgProvider = configuration.nnProvider.trimmed().toLower();\n"
+        "            if (vsCfgProvider == \"cpu\") {\n"
+        "                providerPreference = NnExecutionProviderPreference::Cpu;\n"
+        "            } else if (vsCfgProvider == \"cuda\" || vsCfgProvider == \"gpu\") {\n"
+        "                providerPreference = NnExecutionProviderPreference::Cuda;\n"
+        "            }"
+    )
+    if old_pref not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for providerPreference declaration not found"
+        )
+    text = text.replace(old_pref, new_pref, 1)
+
+    # 2) Gate the CoreML attempt on nn_provider != "cpu".
+    old_coreml_gate = (
+        "#if defined(__APPLE__)\n"
+        "            if (!onnxReady) {\n"
+        "                Ort::SessionOptions coremlOptions;"
+    )
+    new_coreml_gate = (
+        "#if defined(__APPLE__)\n"
+        "            if (!onnxReady && vsCfgProvider != \"cpu\") {\n"
+        "                Ort::SessionOptions coremlOptions;"
+    )
+    if old_coreml_gate not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for CoreML gate not found (CoreML patch missing?)"
+        )
+    text = text.replace(old_coreml_gate, new_coreml_gate, 1)
+
+    return text, True
+
+
 def patch_comb_cpp(path: Path) -> bool:
     text = path.read_text()
     text, changed_mp = patch_comb_cpp_model_path(text)
     text, changed_cm = patch_comb_cpp_coreml(text)
-    if changed_mp or changed_cm:
+    text, changed_pp = patch_comb_cpp_provider_override(text)
+    if changed_mp or changed_cm or changed_pp:
         path.write_text(text)
-    return changed_mp or changed_cm
+    return changed_mp or changed_cm or changed_pp
 
 
 def main(argv: list[str]) -> int:

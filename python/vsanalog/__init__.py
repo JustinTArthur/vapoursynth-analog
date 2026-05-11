@@ -70,6 +70,14 @@ _NN_DECODER_DEFAULT_VERSION: dict[str, str] = {
     "ldzeug2_color_cnn": "v2",
 }
 
+# Accepted values for the ``nn_provider`` kwarg. Matches the C++ parser in
+# ldzeug_decoders.cpp / patched comb.cpp. Aliases share the same handler.
+# MIGraphX is the canonical AMD/HIP path; the lower-level ROCM EP is not
+# exposed because AMD's recommendation and most user tooling targets MIGraphX.
+_NN_PROVIDERS = frozenset({
+    "auto", "cpu", "cuda", "gpu", "migraphx", "tensorrt", "trt", "coreml",
+})
+
 
 def _get_plugin_path() -> Path:
     """Derive the filesystem path of the bundled vsanalog shared library."""
@@ -147,6 +155,7 @@ def decode_4fsc_video(
     decoder: str | None = None,
     model_version: str | None = None,
     model_path: str | Path | None = None,
+    onnx_provider: str | None = None,
     reverse_fields: bool = False,
     chroma_gain: float = 1.0,
     chroma_phase: float = 0.0,
@@ -172,22 +181,51 @@ def decode_4fsc_video(
     ``model_version`` to select a bundled model or ``model_path`` to point at
     a custom ONNX file. Such decoders are NTSC-only — PAL and PAL-M sources
     will be rejected.
+
+    ``onnx_provider`` optionally pins the ONNX Runtime execution provider for
+    NN decoders. Recognized values: ``"auto"`` (default; CoreML on macOS,
+    CPU elsewhere), ``"cpu"``, ``"cuda"`` / ``"gpu"``, ``"migraphx"``,
+    ``"tensorrt"`` / ``"trt"``, ``"coreml"``. The matching provider library
+    (e.g. ``libonnxruntime_providers_cuda.so``) must be installed next to
+    the bundled ``libonnxruntime`` for the request to succeed.
     """
     kwargs: dict[str, Any] = {}
 
     decoder_lower = decoder.lower() if decoder is not None else None
     is_nn_decoder = decoder_lower in _NN_DECODERS
 
-    if not is_nn_decoder and (model_version is not None or model_path is not None):
+    if not is_nn_decoder and (
+        model_version is not None or model_path is not None or onnx_provider is not None
+    ):
         valid = ", ".join(sorted(_NN_DECODERS))
         raise ValueError(
-            "model_version and model_path are only meaningful for "
-            f"neural-network decoders ({valid}); set decoder= first."
+            "model_version, model_path, and onnx_provider are only meaningful "
+            f"for neural-network decoders ({valid}); set decoder= first."
         )
     if is_nn_decoder:
-        kwargs["nn_model_path"] = _resolve_nn_model_path(
+        kwargs["model_path"] = _resolve_nn_model_path(
             decoder_lower, model_version, model_path
         )
+        if onnx_provider is not None:
+            onnx_provider_lower = onnx_provider.strip().lower()
+            if onnx_provider_lower not in _NN_PROVIDERS:
+                valid = ", ".join(sorted(_NN_PROVIDERS))
+                raise ValueError(
+                    f"Unknown onnx_provider {onnx_provider!r}. "
+                    f"Valid values: {valid}."
+                )
+            # nntransform3d's upstream code only wires cpu/cuda/coreml; reject
+            # AMD/TRT values for it so the user gets a clear error instead of
+            # silent CPU fallback.
+            if (decoder_lower == "nntransform3d"
+                    and onnx_provider_lower not in {"auto", "cpu", "cuda", "gpu", "coreml"}):
+                raise ValueError(
+                    f"onnx_provider={onnx_provider!r} is not yet supported for "
+                    "decoder='nntransform3d'. Valid values for this decoder: "
+                    "auto, cpu, cuda, gpu, coreml. The ldzeug2_* decoders "
+                    "support the full provider set."
+                )
+            kwargs["onnx_provider"] = onnx_provider_lower
 
     # Optional parameters — only pass when explicitly provided so the
     # C++ side can distinguish "not given" from "given as default".

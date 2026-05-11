@@ -15,6 +15,7 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         decoder=None, \
         model_version=None, \
         model_path=None, \
+        onnx_provider=None, \
         reverse_fields=False, \
         chroma_gain=1.0, \
         chroma_phase=0.0, \
@@ -57,7 +58,8 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
 
     :param decoder:
         Chroma decoder to use. One of ``"ntsc1d"``, ``"ntsc2d"``,
-        ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"nntransform3d"``, ``"pal2d"``,
+        ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"nntransform3d"``,
+        ``"ldzeug2_color_cnn"``, ``"ldzeug2_luma_sep"``, ``"pal2d"``,
         ``"transform2d"``, ``"transform3d"``, or ``"mono"``. When *None*, the
         decoder is chosen automatically based on the video system in the TBC
         metadata.
@@ -69,11 +71,16 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
 
     :param model_version:
         Selects which bundled ONNX model to use when *decoder* is a
-        neural-network decoder. For ``decoder="nntransform3d"`` the choices
-        are ``"v1"`` (the original release; CPU baseline) or ``"v2"``
-        (newer/faster, the default). The designations match the
-        nnTransform3D author's original v1/v2 releases. Ignored for
-        non-neural decoders.
+        neural-network decoder.
+
+        * ``decoder="nntransform3d"``: ``"v1"`` or ``"v2"`` (default).
+          Matches the nnTransform3D author's original v1/v2 designations.
+        * ``decoder="ldzeug2_color_cnn"``: ``"v1"``, ``"v1_denoise"``, or
+          ``"v2"`` (default).
+        * ``decoder="ldzeug2_luma_sep"``: ``"field"`` (default) or
+          ``"frame"``.
+
+        Ignored for non-neural decoders.
     :type model_version: :py:class:`str` | None
 
     :param model_path:
@@ -82,6 +89,21 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         with the same architecture as the selected decoder. Ignored for
         non-neural decoders.
     :type model_path: :py:class:`str` | :py:class:`~pathlib.Path` | None
+
+    :param onnx_provider:
+        Optional override for the ONNX Runtime execution provider used by
+        neural-network decoders. Recognized values: ``"auto"`` (default —
+        CoreML on macOS, CPU on Linux/Windows), ``"cpu"``,
+        ``"cuda"`` / ``"gpu"``, ``"migraphx"``, ``"tensorrt"`` / ``"trt"``,
+        ``"coreml"``. The matching provider library (e.g.
+        ``libonnxruntime_providers_cuda.so``) must be installed next to the
+        bundled ``libonnxruntime`` for the request to succeed.
+
+        For ``decoder="nntransform3d"`` only ``auto``/``cpu``/``cuda``/
+        ``gpu``/``coreml`` are currently wired; passing ``migraphx``,
+        ``tensorrt``, or ``trt`` raises :class:`ValueError`. The
+        ``ldzeug2_*`` decoders accept the full provider set.
+    :type onnx_provider: :py:class:`str` | None
 
     :param bool reverse_fields:
         Swap field order.
@@ -203,10 +225,50 @@ The other comb-related arguments (``chroma_gain``, ``chroma_phase``,
 ``chroma_nr``, ``luma_nr``, ``phase_compensation``) still apply to the
 downstream pipeline.
 
-Inference uses ONNX Runtime's CPU execution provider by default. To use
-hardware acceleration, install a GPU-enabled ONNX Runtime (e.g.
-``onnxruntime-gpu`` for CUDA on Linux/Windows) so it's discoverable in your
-library search path; the runtime auto-selects it when available.
+ldzeug2 decoders
+^^^^^^^^^^^^^^^^
+
+Two additional NN decoders adapted from jsaowji's
+`ldzeug2 <https://github.com/jsaowji/ldzeug2>`_ project:
+
+* ``decoder="ldzeug2_color_cnn"`` — joint Y/C separator and chroma
+  demodulator. One inference per field; bypasses the comb pipeline.
+  Bundled weights: ``model_version="v1"``, ``"v1_denoise"``, ``"v2"``
+  (default).
+* ``decoder="ldzeug2_luma_sep"`` — luma-only NN extractor.
+  ``model_version="field"`` (default) or ``"frame"``. In the current
+  prerelease this decoder emits luma only and writes neutral chroma; the
+  downstream analytical chroma demodulator is a planned follow-up.
+
+Both reject PAL and PAL-M sources for the same reason as ``nntransform3d``.
+
+Hardware acceleration
+^^^^^^^^^^^^^^^^^^^^^
+
+By default neural decoders use the CoreML provider on macOS and the CPU
+provider on Linux/Windows. Pass ``onnx_provider=`` to select a different
+ONNX Runtime execution provider; the matching provider library must be
+installed next to the bundled ``libonnxruntime``.
+
+.. code-block:: python
+
+    # Use NVIDIA CUDA on Linux/Windows (requires CUDA Toolkit + cuDNN
+    # installed system-wide and libonnxruntime_providers_cuda.so/.dll
+    # placed next to the bundled libonnxruntime):
+    clip = decode_4fsc_video(
+        "ntsc_capture.tbc",
+        decoder="ldzeug2_color_cnn",
+        onnx_provider="cuda",
+    )
+
+    # Force CPU even on macOS (useful for benchmarking — for
+    # nnTransform3D specifically, CPU can be faster than CoreML because
+    # of per-block invocation overhead):
+    clip = decode_4fsc_video(
+        "ntsc_capture.tbc",
+        decoder="nntransform3d",
+        onnx_provider="cpu",
+    )
 
 Dropout Correction
 ^^^^^^^^^^^^^^^^^^

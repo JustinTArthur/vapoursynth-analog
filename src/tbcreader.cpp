@@ -185,7 +185,7 @@ bool TbcReader::configureDecoder() {
                           : QStringLiteral("PAL_M"));
                 return false;
             }
-            if (config.nnModelPath.empty()) {
+            if (config.modelPath.empty()) {
                 lastError = QStringLiteral(
                     "%1 decoder requires a model file path "
                     "(set via the model_version or model_path argument)"
@@ -251,7 +251,8 @@ bool TbcReader::configureDecoder() {
                     combConfig.dimensions = 3;
                     combConfig.adaptive = true;
                     combConfig.nnTransform3D = true;
-                    combConfig.nnModelPath = QString::fromStdString(config.nnModelPath);
+                    combConfig.nnModelPath = QString::fromStdString(config.modelPath);
+                    combConfig.nnProvider = QString::fromStdString(config.onnxProvider);
                     break;
                 default:
                     break;
@@ -322,7 +323,8 @@ bool TbcReader::configureDecoder() {
             try {
                 ldzeugColorCnn->configure(
                     videoParameters,
-                    QString::fromStdString(config.nnModelPath));
+                    QString::fromStdString(config.modelPath),
+                    QString::fromStdString(config.onnxProvider));
             } catch (const std::exception &e) {
                 lastError = QStringLiteral(
                     "ldzeug2_color_cnn: failed to load ONNX model: %1")
@@ -339,10 +341,13 @@ bool TbcReader::configureDecoder() {
 
         case DecoderType::Ldzeug2LumaSep: {
             ldzeugLumaSep = std::make_unique<LdzeugLumaSepDecoder>();
-            const QString modelPath = QString::fromStdString(config.nnModelPath);
+            const QString modelPath = QString::fromStdString(config.modelPath);
             ldzeugLumaSep->setMode(lumaSepModeFromModelPath(modelPath));
             try {
-                ldzeugLumaSep->configure(videoParameters, modelPath);
+                ldzeugLumaSep->configure(
+                    videoParameters,
+                    modelPath,
+                    QString::fromStdString(config.onnxProvider));
             } catch (const std::exception &e) {
                 lastError = QStringLiteral(
                     "ldzeug2_luma_sep: failed to load ONNX model: %1")

@@ -24,22 +24,41 @@ Ort::Env &sharedOrtEnv() {
     return env;
 }
 
-Ort::SessionOptions makeSessionOptions() {
+Ort::SessionOptions makeSessionOptions(const QString &requestedProvider) {
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(1);
     opts.SetInterOpNumThreads(1);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-    // Prefer CoreML on macOS, targeting all compute units (CPU/GPU/ANE).
-    // Default MLComputeUnits is CPUOnly, which is no faster than the CPU EP.
+    const QString pref = requestedProvider.trimmed().toLower();
+    const bool wantsCpuOnly = (pref == "cpu");
+    auto tryEP = [&opts](const char *name,
+                         const std::unordered_map<std::string, std::string> &epOpts = {}) {
+        try {
+            opts.AppendExecutionProvider(name, epOpts);
+            qInfo() << "ldzeug decoder: requested" << name << "execution provider";
+        } catch (const std::exception &e) {
+            qWarning() << "ldzeug decoder:" << name
+                       << "EP unavailable; falling back to CPU:" << e.what();
+        }
+    };
+
+    if (wantsCpuOnly) {
+        return opts;  // skip every accelerator attempt
+    }
+
 #if defined(__APPLE__)
-    try {
-        opts.AppendExecutionProvider("CoreML", {{"MLComputeUnits", "ALL"}, {"ModelFormat", "MLProgram"}});
-        qInfo() << "ldzeug decoder: requested CoreML execution provider (units: ALL)";
-    } catch (const std::exception &e) {
-        qWarning() << "ldzeug decoder: CoreML EP unavailable:" << e.what();
+    // macOS default: CoreML. Honor an explicit "coreml" too.
+    if (pref.isEmpty() || pref == "auto" || pref == "coreml") {
+        tryEP("CoreML", {{"MLComputeUnits", "ALL"}, {"ModelFormat", "MLProgram"}});
     }
 #endif
+    // Cross-platform GPU EPs by request. CPU is always the implicit fallback
+    // for ops the chosen EP can't handle.
+    if (pref == "cuda" || pref == "gpu") tryEP("CUDA");
+    else if (pref == "migraphx") tryEP("MIGraphX");
+    else if (pref == "tensorrt" || pref == "trt") tryEP("Tensorrt");
+
     return opts;
 }
 
@@ -164,14 +183,10 @@ void applyUvFromIq(double i, double q, double bp, double bq,
 // =====================================================================
 
 void LdzeugDecoderBase::configure(
-    const LdDecodeMetaData::VideoParameters &vp, const QString &modelPath) {
+    const LdDecodeMetaData::VideoParameters &vp, const QString &modelPath,
+    const QString &provider) {
     videoParameters = vp;
-    if (!ortEnv) {
-        // We don't actually own the env (it's process-shared), but holding
-        // a reference here keeps the Session API happy without a global
-        // reach-around in derived code.
-    }
-    ortSession = openSession(modelPath, makeSessionOptions());
+    ortSession = openSession(modelPath, makeSessionOptions(provider));
 }
 
 // =====================================================================

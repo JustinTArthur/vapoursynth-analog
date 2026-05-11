@@ -40,9 +40,12 @@ public:
     virtual ~LdzeugDecoderBase() = default;
 
     // Update video parameters and (re)load the ONNX session from modelPath.
-    // Throws std::runtime_error on session load failure.
+    // ``provider`` is the EP name to request (e.g. "cuda", "rocm", "coreml");
+    // empty means platform default. Throws std::runtime_error on session load
+    // failure.
     void configure(const LdDecodeMetaData::VideoParameters &videoParameters,
-                   const QString &modelPath);
+                   const QString &modelPath,
+                   const QString &provider = {});
 
     // Process a sequence of fields into a sequence of full-frame ComponentFrames.
     // Mirrors Comb::decodeFrames signature so callers can dispatch uniformly.

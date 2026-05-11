@@ -11,7 +11,8 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         [, chroma_or_pb_source] \
         [, pr_source] \
         [, decoder] \
-        [, nn_model_path] \
+        [, model_path] \
+        [, onnx_provider] \
         [, reverse_fields=0] \
         [, chroma_gain=1.0] \
         [, chroma_phase=0.0] \
@@ -58,12 +59,24 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         ``mono`` decoder so it isn't run through Y/C separation a second
         time.
 
-    :param str nn_model_path:
+    :param str model_path:
         Filesystem path to an ONNX model file. Required when ``decoder`` is
-        a neural-network decoder (e.g. ``"nntransform3d"``). The high-level
-        Python wrapper (:func:`vsanalog.decode_4fsc_video`) resolves this from
-        ``model_version="v1"|"v2"`` against bundled weights; lower-level
-        callers must supply the path directly.
+        a neural-network decoder (e.g. ``"nntransform3d"``,
+        ``"ldzeug2_color_cnn"``, ``"ldzeug2_luma_sep"``). The high-level Python
+        wrapper (:func:`vsanalog.decode_4fsc_video`) resolves this from
+        ``model_version=`` against bundled weights; lower-level callers must
+        supply the path directly.
+
+    :param str onnx_provider:
+        Optional override for the ONNX Runtime execution provider used by
+        neural-network decoders. Recognized values: ``"auto"`` (default;
+        CoreML on macOS, CPU elsewhere), ``"cpu"``, ``"cuda"`` / ``"gpu"``,
+        ``"migraphx"``, ``"tensorrt"`` / ``"trt"``, ``"coreml"``. The matching
+        provider library (e.g. ``libonnxruntime_providers_cuda.so``) must be
+        installed next to the bundled ``libonnxruntime`` for the request to
+        succeed. For ``nntransform3d`` only
+        ``auto``/``cpu``/``cuda``/``gpu``/``coreml`` are wired today; the
+        AMD/TRT names work for the ``ldzeug2_*`` decoders.
 
     :param int reverse_fields:
         Set to 1 to swap field order.
@@ -158,8 +171,18 @@ The ``decoder`` parameter accepts the following values:
     * - ``nntransform3d``
       - NTSC
       - 3D adaptive comb filter with neural-network Y/C separation
-        (``nnTransform3D``). Requires ``nn_model_path``. Rejects PAL/PAL-M
+        (``nnTransform3D``). Requires ``model_path``. Rejects PAL/PAL-M
         sources.
+    * - ``ldzeug2_luma_sep``
+      - NTSC
+      - Neural Y/C separator from jsaowji's ldzeug2 (luma-only output
+        in this prerelease; chroma demod is a planned follow-up).
+        Requires ``model_path``. Rejects PAL/PAL-M sources.
+    * - ``ldzeug2_color_cnn``
+      - NTSC
+      - Neural joint Y/C separator + chroma demodulator from
+        jsaowji's ldzeug2. Bypasses the comb pipeline. Requires
+        ``model_path``. Rejects PAL/PAL-M sources.
     * - ``pal2d``
       - PAL
       - 2D PALcolour filter (default for PAL)

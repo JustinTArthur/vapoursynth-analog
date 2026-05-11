@@ -68,7 +68,13 @@ public:
 
         // Path to the ONNX model file used by neural-network decoders.
         // Required when decoder is NnTransform3D (or any future NN decoder).
-        std::string nnModelPath;
+        std::string modelPath;
+
+        // ONNX execution provider override for NN decoders. Empty = use the
+        // platform default (CoreML on macOS, CPU on Linux/Windows).
+        // Recognized: "auto", "cpu", "cuda", "gpu", "migraphx",
+        // "tensorrt", "trt", "coreml".
+        std::string onnxProvider;
     };
 
     // True if the given decoder uses neural-network inference and therefore

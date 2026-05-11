@@ -28,13 +28,14 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
         config.dropoutCorrect = opts->dropoutCorrect;
         config.dropoutOvercorrect = opts->dropoutOvercorrect;
         config.dropoutIntra = opts->dropoutIntra;
-        config.nnModelPath = opts->nnModelPath;
+        config.modelPath = opts->modelPath;
+        config.onnxProvider = opts->onnxProvider;
         if (!opts->decoder.empty()) {
             config.decoder = TbcReader::parseDecoderName(
                 QString::fromStdString(opts->decoder));
         }
         if (TbcReader::isNeuralDecoder(config.decoder)
-                && config.nnModelPath.empty()) {
+                && config.modelPath.empty()) {
             throw VSAnalogException(
                 "Neural-network decoder selected but no model path was "
                 "supplied (provide model_version or model_path)");
@@ -47,7 +48,8 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
         // already Y/C-separated and avoid chroma-aware decoders that might
         // reseparate based on potentially-absent chroma in the luma source.
         lumaConfig.decoder = TbcReader::DecoderType::Mono;
-        lumaConfig.nnModelPath.clear();
+        lumaConfig.modelPath.clear();
+        lumaConfig.onnxProvider.clear();
     }
 
     if (!reader->open(sourcePath, lumaConfig)) {
