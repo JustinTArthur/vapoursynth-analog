@@ -19,12 +19,26 @@ import shutil
 import sys
 from pathlib import Path
 
-# Submodule entries we keep. Anything else under extern/tbc-tools/ is
-# deleted from the staged dist tree before the tarball is created.
-KEEP = frozenset({
-    "src",      # C++ sources we compile
-    "LICENSE",  # GPL-3 text travels with the source
-})
+# Top-level submodule entries we keep. Anything else under extern/tbc-tools/
+# is deleted from the staged dist tree before the tarball is created.
+KEEP_TOP = {"src", "LICENSE"}
+
+# Subdirectories under src/ we actually compile. The rest of src/ (Qt
+# GUIs, video exporters, vendored teletext fonts, etc.) gets stripped.
+KEEP_SRC = {"library", "ld-chroma-decoder"}
+
+
+def prune_dir(root: Path, keep: set[str]) -> list[str]:
+    pruned = []
+    for entry in sorted(root.iterdir()):
+        if entry.name in keep:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+        pruned.append(entry.name)
+    return pruned
 
 
 def main():
@@ -41,19 +55,18 @@ def main():
         # to prune; the build will fail later with a clearer message.
         return 0
 
-    pruned = []
-    for entry in sorted(submodule_dst.iterdir()):
-        if entry.name in KEEP:
-            continue
-        if entry.is_dir():
-            shutil.rmtree(entry)
-        else:
-            entry.unlink()
-        pruned.append(entry.name)
+    pruned_top = prune_dir(submodule_dst, KEEP_TOP)
+    src_dst = submodule_dst / "src"
+    pruned_src = prune_dir(src_dst, KEEP_SRC) if src_dst.is_dir() else []
 
+    parts = []
+    if pruned_top:
+        parts.append("top-level: " + ", ".join(pruned_top))
+    if pruned_src:
+        parts.append("src/: " + ", ".join(pruned_src))
     print(
-        f"pruned extern/tbc-tools entries from sdist: {', '.join(pruned)}"
-        if pruned
+        "pruned extern/tbc-tools entries from sdist — " + "; ".join(parts)
+        if parts
         else "extern/tbc-tools sdist staging already minimal",
         flush=True,
     )
