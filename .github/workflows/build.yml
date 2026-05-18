@@ -669,6 +669,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # The action's auto-detect only flags hyphen-suffixed (SemVer) tags
+          # as prereleases; PEP 440's hyphen-less form (v1.0.0a1, v1.0.0b1,
+          # v1.0.0rc1, v1.0.0.dev1) needs an explicit flag.
+          prerelease: ${{ contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') || contains(github.ref_name, '.dev') }}
           files: |
             artifacts/**/*.tar.xz
             artifacts/**/*.whl
