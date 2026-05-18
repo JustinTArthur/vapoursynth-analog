@@ -16,6 +16,7 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         model_version=None, \
         model_path=None, \
         onnx_provider=None, \
+        model_chroma_bandpass=None, \
         reverse_fields=False, \
         chroma_gain=1.0, \
         chroma_phase=0.0, \
@@ -59,10 +60,10 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
     :param decoder:
         Chroma decoder to use. One of ``"ntsc1d"``, ``"ntsc2d"``,
         ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"nntransform3d"``,
-        ``"ldzeug2_color_cnn"``, ``"ldzeug2_luma_sep"``, ``"pal2d"``,
-        ``"transform2d"``, ``"transform3d"``, or ``"mono"``. When *None*, the
-        decoder is chosen automatically based on the video system in the TBC
-        metadata.
+        ``"ldzeug2_color_cnn"``, ``"ldzeug2_luma_sep"``,
+        ``"ldzeug2_luma_sep_frame"``, ``"pal2d"``, ``"transform2d"``,
+        ``"transform3d"``, or ``"mono"``. When *None*, the decoder is chosen
+        automatically based on the video system in the TBC metadata.
 
         Neural-network decoders (those that load ONNX model weights at
         runtime) are NTSC-only and reject PAL and PAL-M sources. They take an
@@ -75,10 +76,12 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
 
         * ``decoder="nntransform3d"``: ``"v1"`` or ``"v2"`` (default).
           Matches the nnTransform3D author's original v1/v2 designations.
-        * ``decoder="ldzeug2_color_cnn"``: ``"v1"``, ``"v1_denoise"``, or
-          ``"v2"`` (default).
-        * ``decoder="ldzeug2_luma_sep"``: ``"field"`` (default) or
-          ``"frame"``.
+        * ``decoder="ldzeug2_color_cnn"``: ``"1031640"``,
+          ``"denoise_613928_ft22k"``, or ``"v2_alot"`` (default). Names
+          mirror jsaowji's source filenames.
+        * ``decoder="ldzeug2_luma_sep"``: ``"2dgray_fields"`` (default).
+        * ``decoder="ldzeug2_luma_sep_frame"``:
+          ``"2d_frame_gray_gray_run2_latest"`` (default).
 
         Ignored for non-neural decoders.
     :type model_version: :py:class:`str` | None
@@ -104,6 +107,16 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         ``tensorrt``, or ``trt`` raises :class:`ValueError`. The
         ``ldzeug2_*`` decoders accept the full provider set.
     :type onnx_provider: :py:class:`str` | None
+
+    :param model_chroma_bandpass:
+        Only meaningful with ``decoder="ldzeug2_luma_sep"`` or
+        ``decoder="ldzeug2_luma_sep_frame"``. Toggles the 17-tap low-pass
+        FIR applied to the demodulated I and Q before deriving U/V.
+        ``True`` (the default behavior) mirrors jsaowji's
+        ``comb_split_already(..., color_bp=True)``; ``False`` skips the
+        filter. Passing this kwarg with any other decoder raises
+        :class:`ValueError`.
+    :type model_chroma_bandpass: :py:class:`bool` | None
 
     :param bool reverse_fields:
         Swap field order.
@@ -232,13 +245,16 @@ Two additional NN decoders adapted from jsaowji's
 `ldzeug2 <https://github.com/jsaowji/ldzeug2>`_ project:
 
 * ``decoder="ldzeug2_color_cnn"`` — joint Y/C separator and chroma
-  demodulator. One inference per field; bypasses the comb pipeline.
-  Bundled weights: ``model_version="v1"``, ``"v1_denoise"``, ``"v2"``
-  (default).
-* ``decoder="ldzeug2_luma_sep"`` — luma-only NN extractor.
-  ``model_version="field"`` (default) or ``"frame"``. In the current
-  prerelease this decoder emits luma only and writes neutral chroma; the
-  downstream analytical chroma demodulator is a planned follow-up.
+  demodulator. Bypasses the comb pipeline. All bundled weights are
+  per-field: ``model_version="1031640"``, ``"denoise_613928_ft22k"``, or
+  ``"v2_alot"`` (default).
+* ``decoder="ldzeug2_luma_sep"`` (per-field) and
+  ``decoder="ldzeug2_luma_sep_frame"`` (weaved-frame) — NN extracts
+  luma; chroma is recovered analytically (``CVBS − Y`` → quadrature I/Q
+  demod → ``uv_from_iq`` rotation) with an optional 17-tap LP FIR
+  controlled by ``model_chroma_bandpass=`` (default: enabled). Field and
+  frame are exposed as separate decoder names because they're different
+  input pipelines, not just different weights.
 
 Both reject PAL and PAL-M sources for the same reason as ``nntransform3d``.
 

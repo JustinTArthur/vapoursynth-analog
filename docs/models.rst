@@ -50,45 +50,63 @@ sample position and ``fieldPhase``, then feeds the network a 3-channel
 ``[CVBS, I-carrier, Q-carrier]`` stack and applies ``uv_from_iq`` rotation
 to the network's ``[Y, I, Q]`` output to derive Y/U/V.
 
+All bundled ``ldzeug2_color_cnn`` weights are per-field; the decoder runs
+one inference per field and weaves the outputs into the final frame. If a
+weaved-frame ``ColorCNN`` weights file becomes available in the future, it
+will get its own ``decoder=`` name (e.g. ``ldzeug2_color_cnn_frame``)
+because field and frame are different input pipelines, not a weights swap.
+
 .. list-table::
     :header-rows: 1
-    :widths: 18 82
+    :widths: 28 72
 
     * - ``model_version``
       - Description
-    * - ``"v1"``
-      - jsaowji's original ``ColorCNN`` weights (`color_cnn_1031640.onnx`).
-    * - ``"v1_denoise"``
+    * - ``"1031640"``
+      - jsaowji's original ``ColorCNN`` weights (``color_cnn_1031640.onnx``).
+    * - ``"denoise_613928_ft22k"``
       - The same ``ColorCNN`` architecture, fine-tuned by jsaowji with a
-        denoising emphasis (`color_cnn_denoise_613928_ft22k.onnx`).
-    * - ``"v2"`` *(default)*
+        denoising emphasis (``color_cnn_denoise_613928_ft22k.onnx``).
+    * - ``"v2_alot"`` *(default)*
       - jsaowji's newer ``ColorCNNV2`` architecture
-        (`color_cnn_v2_alot.onnx`) — single-branch 64-feature × 16-conv
+        (``color_cnn_v2_alot.onnx``) — single-branch 64-feature × 16-conv
         network with two learnable I/Q-carrier-mixing parameters at the
-        midpoint. Greater capacity than v1.
+        midpoint. Greater capacity than the original ``ColorCNN``.
 
-``ldzeug2_luma_sep``
-~~~~~~~~~~~~~~~~~~~~
+``ldzeug2_luma_sep`` / ``ldzeug2_luma_sep_frame``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 NTSC-only. A neural network extracts the luma plane from the CVBS signal;
-the chroma demodulator that ldzeug2 normally pairs with it is not yet wired
-in vapoursynth-analog, so the current output is luma-only (neutral U/V).
-Also derived from **jsaowji**'s `ldzeug2
+chroma is then recovered analytically as ``CVBS − Y``, run through a
+quadrature I/Q demodulator (mirroring ``ld-chroma-decoder``'s ``splitIQ``),
+optionally passed through a 17-tap low-pass FIR (the ``c_colorlp_b``
+coefficients from tbc-tools), and finally rotated to U/V via
+``uv_from_iq``. Derived from **jsaowji**'s `ldzeug2
 <https://github.com/jsaowji/ldzeug2>`_.
+
+Field and weaved-frame are different input pipelines (one inference per
+field vs. one per frame), so they're exposed as separate decoder names
+rather than ``model_version`` variants: pick ``ldzeug2_luma_sep`` for the
+per-field network and ``ldzeug2_luma_sep_frame`` for the weaved-frame one.
+The ``model_chroma_bandpass`` kwarg (default: enabled) toggles the FIR
+step for either, mirroring jsaowji's ``comb_split_already(..., color_bp=True)``.
 
 .. list-table::
     :header-rows: 1
-    :widths: 15 85
+    :widths: 26 38 36
 
-    * - ``model_version``
+    * - ``decoder``
+      - ``model_version``
       - Description
-    * - ``"field"`` *(default)*
+    * - ``"ldzeug2_luma_sep"``
+      - ``"2dgray_fields"`` *(default)*
       - Per-field ``compact`` CNN trained on individual fields
-        (`luma_sep_2dgray_fields.onnx`). Better motion handling at the cost
-        of less stationary detail.
-    * - ``"frame"``
+        (``luma_sep_2dgray_fields.onnx``). Better motion handling at the
+        cost of less stationary detail.
+    * - ``"ldzeug2_luma_sep_frame"``
+      - ``"2d_frame_gray_gray_run2_latest"`` *(default)*
       - Same architecture trained on weaved frames
-        (`luma_sep_2d_frame_gray_gray_run2_latest.onnx`). Retains more
+        (``luma_sep_2d_frame_gray_gray_run2_latest.onnx``). Retains more
         stationary detail; less robust on motion.
 
 Custom weights

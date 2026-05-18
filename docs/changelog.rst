@@ -1,8 +1,8 @@
 Changelog
 =========
 
-0.3.0a1
--------
+0.3.0 (Not Yet Released)
+------------------------
 - New ``nntransform3d`` decoder option for ``decode_4fsc_video``: an
   NTSC-only 3D adaptive comb that substitutes neural-network inference
   for the analytical FFT-based Y/C separation step. Two model versions
@@ -13,16 +13,30 @@ Changelog
   design and weights are by **asdfqazsnbb** (the nnTransform3D author);
   the surrounding ``ld-chroma-decoder`` integration is from
   `harrypm/tbc-tools <https://github.com/harrypm/tbc-tools>`_.
-- New ``ldzeug2_luma_sep`` and ``ldzeug2_color_cnn`` decoders, NTSC-only,
-  derived from **jsaowji**'s `ldzeug2
-  <https://github.com/jsaowji/ldzeug2>`_ models (weights treated as
-  public domain per the author). ``ldzeug2_luma_sep`` performs neural
-  Y/C separation only (``model_version="field"|"frame"``) with
-  downstream comb demodulation; ``ldzeug2_color_cnn``
-  (``model_version="v1"|"v1_denoise"|"v2"``) performs joint NN
-  separation and chroma demodulation in one pass, replacing the comb
-  entirely. All five bundled weights are jsaowji's; see :doc:`/models`
-  for the source-to-bundle filename mapping.
+- New ``ldzeug2_luma_sep``, ``ldzeug2_luma_sep_frame``, and
+  ``ldzeug2_color_cnn`` decoders, NTSC-only, derived from **jsaowji**'s
+  `ldzeug2 <https://github.com/jsaowji/ldzeug2>`_ models (weights
+  treated as public domain per the author). The ``luma_sep`` decoders
+  perform neural Y/C separation followed by analytical chroma
+  demodulation (``C = CVBS − Y`` → quadrature I/Q demod → optional
+  17-tap LP FIR → ``uv_from_iq`` rotation); ``ldzeug2_color_cnn``
+  performs joint NN separation and chroma demodulation in one pass,
+  replacing the comb entirely. Per-field vs. weaved-frame input is a
+  different inference pipeline, so the two ``luma_sep`` variants are
+  exposed as separate decoder names: ``ldzeug2_luma_sep`` (per-field)
+  and ``ldzeug2_luma_sep_frame`` (weaved-frame). ``model_version`` values
+  mirror jsaowji's source filenames so each bundled artifact is
+  unambiguous — ``ldzeug2_luma_sep``: ``"2dgray_fields"`` (default);
+  ``ldzeug2_luma_sep_frame``: ``"2d_frame_gray_gray_run2_latest"``
+  (default); ``ldzeug2_color_cnn``: ``"1031640"``,
+  ``"denoise_613928_ft22k"``, ``"v2_alot"`` (default). See
+  :doc:`/models` for the source-to-bundle filename mapping.
+- New ``model_chroma_bandpass`` kwarg on ``decode_4fsc_video`` toggles
+  the 17-tap LP FIR on the demodulated I and Q before deriving U/V for
+  the ``ldzeug2_luma_sep`` / ``ldzeug2_luma_sep_frame`` decoders
+  (default: enabled, mirroring jsaowji's
+  ``comb_split_already(..., color_bp=True)``). Passing this kwarg with
+  any other decoder raises :class:`ValueError`.
 - New ``onnx_provider=`` argument on ``decode_4fsc_video`` to pin the
   ONNX Runtime execution provider used by neural decoders
   (``"auto"``, ``"cpu"``, ``"cuda"`` / ``"gpu"``, ``"migraphx"``,

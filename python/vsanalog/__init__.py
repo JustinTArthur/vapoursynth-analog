@@ -44,21 +44,29 @@ _NN_DECODERS: dict[str, dict[str, Path]] = {
         "v1": _MODELS_DIR / "nntransform3d_v1.onnx",
         "v2": _MODELS_DIR / "nntransform3d_v2.onnx",
     },
-    # ldzeug2 luma-only separator. NN replaces step 1 of the NTSC decode
-    # chain (Y/C separation); chroma is recovered as ``CVBS - luma`` and
-    # passed through a 2D analytical comb downstream. ``field`` weights
-    # are trained on per-field gray, ``frame`` weights on weaved frames.
+    # ldzeug2 NN luma extractor, per-field model. Version tags mirror
+    # jsaowji's source filenames so each version's artifact is unambiguous.
     "ldzeug2_luma_sep": {
-        "field": _MODELS_DIR / "ldzeug2_luma_sep_field.onnx",
-        "frame": _MODELS_DIR / "ldzeug2_luma_sep_frame.onnx",
+        "2dgray_fields": _MODELS_DIR / "ldzeug2_luma_sep_2dgray_fields.onnx",
     },
-    # ldzeug2 joint Y/C separator + chroma demodulator. NN takes
-    # ``[CVBS, I-carrier, Q-carrier]`` and emits ``[Y, I, Q]`` directly,
-    # replacing steps 1+2 of the NTSC chain. No comb runs downstream.
+    # ldzeug2 NN luma extractor, weaved-frame model. Separate decoder name
+    # because frame and field are different input pipelines, not just
+    # different weights — jsaowji's bundled weights advertise dynamic shapes,
+    # so the plugin can't infer mode from the model alone.
+    "ldzeug2_luma_sep_frame": {
+        "2d_frame_gray_gray_run2_latest": (
+            _MODELS_DIR / "ldzeug2_luma_sep_2d_frame_gray_gray_run2_latest.onnx"
+        ),
+    },
+    # ldzeug2 joint Y/C separator + chroma demodulator. Version tags mirror
+    # jsaowji's source filenames (with the redundant ``color_cnn_`` prefix
+    # dropped since the decoder name conveys it).
     "ldzeug2_color_cnn": {
-        "v1": _MODELS_DIR / "ldzeug2_color_cnn_v1.onnx",
-        "v1_denoise": _MODELS_DIR / "ldzeug2_color_cnn_v1_denoise.onnx",
-        "v2": _MODELS_DIR / "ldzeug2_color_cnn_v2.onnx",
+        "1031640": _MODELS_DIR / "ldzeug2_color_cnn_1031640.onnx",
+        "denoise_613928_ft22k": (
+            _MODELS_DIR / "ldzeug2_color_cnn_denoise_613928_ft22k.onnx"
+        ),
+        "v2_alot": _MODELS_DIR / "ldzeug2_color_cnn_v2_alot.onnx",
     },
 }
 
@@ -66,8 +74,9 @@ _NN_DECODERS: dict[str, dict[str, Path]] = {
 # one. Newer/faster releases win the default.
 _NN_DECODER_DEFAULT_VERSION: dict[str, str] = {
     "nntransform3d": "v2",
-    "ldzeug2_luma_sep": "field",
-    "ldzeug2_color_cnn": "v2",
+    "ldzeug2_luma_sep": "2dgray_fields",
+    "ldzeug2_luma_sep_frame": "2d_frame_gray_gray_run2_latest",
+    "ldzeug2_color_cnn": "v2_alot",
 }
 
 # Accepted values for the ``nn_provider`` kwarg. Matches the C++ parser in
@@ -156,6 +165,7 @@ def decode_4fsc_video(
     model_version: str | None = None,
     model_path: str | Path | None = None,
     onnx_provider: str | None = None,
+    model_chroma_bandpass: bool | None = None,
     reverse_fields: bool = False,
     chroma_gain: float = 1.0,
     chroma_phase: float = 0.0,
@@ -188,6 +198,13 @@ def decode_4fsc_video(
     ``"tensorrt"`` / ``"trt"``, ``"coreml"``. The matching provider library
     (e.g. ``libonnxruntime_providers_cuda.so``) must be installed next to
     the bundled ``libonnxruntime`` for the request to succeed.
+
+    ``model_chroma_bandpass`` is only meaningful with
+    ``decoder="ldzeug2_luma_sep"``. When ``True`` (the default behavior on the
+    plugin side), the analytical chroma demod runs the demodulated I and Q
+    samples through a 17-tap low-pass FIR before deriving U/V — mirroring
+    jsaowji's ``comb_split_already(..., color_bp=True)``. Set ``False`` to
+    skip the filter.
     """
     kwargs: dict[str, Any] = {}
 
@@ -201,6 +218,13 @@ def decode_4fsc_video(
         raise ValueError(
             "model_version, model_path, and onnx_provider are only meaningful "
             f"for neural-network decoders ({valid}); set decoder= first."
+        )
+    if model_chroma_bandpass is not None and decoder_lower not in {
+        "ldzeug2_luma_sep", "ldzeug2_luma_sep_frame",
+    }:
+        raise ValueError(
+            "model_chroma_bandpass is only meaningful for "
+            "decoder='ldzeug2_luma_sep' or 'ldzeug2_luma_sep_frame'."
         )
     if is_nn_decoder:
         kwargs["model_path"] = _resolve_nn_model_path(
@@ -226,6 +250,9 @@ def decode_4fsc_video(
                     "support the full provider set."
                 )
             kwargs["onnx_provider"] = onnx_provider_lower
+
+    if model_chroma_bandpass is not None:
+        kwargs["model_chroma_bandpass"] = int(bool(model_chroma_bandpass))
 
     # Optional parameters — only pass when explicitly provided so the
     # C++ side can distinguish "not given" from "given as default".

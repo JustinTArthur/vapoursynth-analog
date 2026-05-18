@@ -66,6 +66,7 @@ struct VSAnalog4fscOptions {
     std::string decoder;           // Decoder name (empty = auto)
     std::string modelPath;         // Filesystem path to ONNX model (for NN decoders)
     std::string onnxProvider;      // ONNX EP name (empty = default per platform)
+    bool modelChromaBandpass = true; // ldzeug2_luma_sep: I/Q LP FIR after demod
 };
 
 // Exception class for VSAnalog errors
