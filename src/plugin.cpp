@@ -277,6 +277,14 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         if (!err && onnxProvider)
             Opts.onnxProvider = onnxProvider;
 
+        // Optional chroma bandpass toggle (only meaningful for ldzeug2_luma_sep;
+        // wrapper enforces that, the plugin just honors what it's given).
+        int modelChromaBandpass = static_cast<int>(
+            vsapi->mapGetInt(In, "model_chroma_bandpass", 0, &err));
+        if (err)
+            modelChromaBandpass = 1;
+        Opts.modelChromaBandpass = (modelChromaBandpass != 0);
+
         // Create the source
         D->V = std::make_unique<VSAnalog4fscSource>(
             Source,
@@ -364,6 +372,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "decoder:data:opt;"
         "model_path:data:opt;"
         "onnx_provider:data:opt;"
+        "model_chroma_bandpass:int:opt;"
         "reverse_fields:int:opt;"
         "chroma_gain:float:opt;"
         "chroma_phase:float:opt;"

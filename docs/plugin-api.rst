@@ -13,6 +13,7 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         [, decoder] \
         [, model_path] \
         [, onnx_provider] \
+        [, model_chroma_bandpass=1] \
         [, reverse_fields=0] \
         [, chroma_gain=1.0] \
         [, chroma_phase=0.0] \
@@ -77,6 +78,14 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         succeed. For ``nntransform3d`` only
         ``auto``/``cpu``/``cuda``/``gpu``/``coreml`` are wired today; the
         AMD/TRT names work for the ``ldzeug2_*`` decoders.
+
+    :param int model_chroma_bandpass:
+        Only meaningful with ``decoder="ldzeug2_luma_sep"`` or
+        ``decoder="ldzeug2_luma_sep_frame"``. Set to 1 (default) to run a
+        17-tap low-pass FIR on the demodulated I/Q before deriving U/V;
+        set to 0 to skip the filter. The high-level Python wrapper
+        rejects non-``None`` values for other decoders; the plugin
+        itself accepts and ignores the value for other decoders.
 
     :param int reverse_fields:
         Set to 1 to swap field order.
@@ -175,14 +184,20 @@ The ``decoder`` parameter accepts the following values:
         sources.
     * - ``ldzeug2_luma_sep``
       - NTSC
-      - Neural Y/C separator from jsaowji's ldzeug2 (luma-only output
-        in this prerelease; chroma demod is a planned follow-up).
-        Requires ``model_path``. Rejects PAL/PAL-M sources.
+      - Neural Y/C separator from jsaowji's ldzeug2 (per-field model);
+        chroma is recovered analytically via ``CVBS − Y`` → quadrature
+        I/Q demod → ``uv_from_iq``. ``model_chroma_bandpass`` toggles
+        the optional 17-tap LP FIR. Requires ``model_path``. Rejects
+        PAL/PAL-M sources.
+    * - ``ldzeug2_luma_sep_frame``
+      - NTSC
+      - Same as ``ldzeug2_luma_sep`` but expects a weaved-frame
+        input model (one inference per frame instead of one per field).
     * - ``ldzeug2_color_cnn``
       - NTSC
       - Neural joint Y/C separator + chroma demodulator from
-        jsaowji's ldzeug2. Bypasses the comb pipeline. Requires
-        ``model_path``. Rejects PAL/PAL-M sources.
+        jsaowji's ldzeug2 (per-field model). Bypasses the comb
+        pipeline. Requires ``model_path``. Rejects PAL/PAL-M sources.
     * - ``pal2d``
       - PAL
       - 2D PALcolour filter (default for PAL)

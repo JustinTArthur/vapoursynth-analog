@@ -39,10 +39,11 @@ public:
         NnTransform3D,
         // ldzeug2 NN decoders. NTSC-only. Bypass Comb entirely.
         // ldzeug2_color_cnn replaces Y/C separation + chroma demod in one
-        // inference; ldzeug2_luma_sep does Y/C separation only (chroma
-        // demod is currently unimplemented — output is luma-only).
+        // inference; ldzeug2_luma_sep does Y/C separation only and then
+        // recovers chroma analytically (CVBS-Y → quadrature demod → uv_from_iq).
         Ldzeug2ColorCnn,
         Ldzeug2LumaSep,
+        Ldzeug2LumaSepFrame,
         // PAL decoders (use PalColour)
         Pal2D,
         Transform2D,
@@ -75,6 +76,12 @@ public:
         // Recognized: "auto", "cpu", "cuda", "gpu", "migraphx",
         // "tensorrt", "trt", "coreml".
         std::string onnxProvider;
+
+        // When true (default), the ldzeug2_luma_sep decoder runs a 17-tap
+        // low-pass FIR on the demodulated I/Q before deriving U/V. Mirrors
+        // jsaowji's comb_split_already(..., color_bp=True). Ignored by every
+        // other decoder.
+        bool modelChromaBandpass = true;
     };
 
     // True if the given decoder uses neural-network inference and therefore

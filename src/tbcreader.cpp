@@ -22,6 +22,7 @@ TbcReader::DecoderType TbcReader::parseDecoderName(const QString &name) {
     if (lower == "nntransform3d") return DecoderType::NnTransform3D;
     if (lower == "ldzeug2_color_cnn") return DecoderType::Ldzeug2ColorCnn;
     if (lower == "ldzeug2_luma_sep") return DecoderType::Ldzeug2LumaSep;
+    if (lower == "ldzeug2_luma_sep_frame") return DecoderType::Ldzeug2LumaSepFrame;
     if (lower == "pal2d") return DecoderType::Pal2D;
     if (lower == "transform2d") return DecoderType::Transform2D;
     if (lower == "transform3d") return DecoderType::Transform3D;
@@ -34,6 +35,7 @@ bool TbcReader::isNeuralDecoder(DecoderType decoder) {
         case DecoderType::NnTransform3D:
         case DecoderType::Ldzeug2ColorCnn:
         case DecoderType::Ldzeug2LumaSep:
+        case DecoderType::Ldzeug2LumaSepFrame:
             return true;
         default:
             return false;
@@ -165,7 +167,8 @@ bool TbcReader::configureDecoder() {
             break;
         case DecoderType::NnTransform3D:
         case DecoderType::Ldzeug2ColorCnn:
-        case DecoderType::Ldzeug2LumaSep: {
+        case DecoderType::Ldzeug2LumaSep:
+        case DecoderType::Ldzeug2LumaSepFrame: {
             // Neural decoders are trained on a specific signal: NTSC composite
             // at 4fsc with NTSC-style chroma encoding. PAL and PAL-M have a
             // different chroma modulation scheme (alternating phase per line),
@@ -174,6 +177,7 @@ bool TbcReader::configureDecoder() {
             const char *decoderName =
                 decoder == DecoderType::NnTransform3D ? "nnTransform3D" :
                 decoder == DecoderType::Ldzeug2ColorCnn ? "ldzeug2_color_cnn" :
+                decoder == DecoderType::Ldzeug2LumaSepFrame ? "ldzeug2_luma_sep_frame" :
                 "ldzeug2_luma_sep";
             if (videoParameters.system != NTSC) {
                 lastError = QStringLiteral(
@@ -324,6 +328,7 @@ bool TbcReader::configureDecoder() {
                 ldzeugColorCnn->configure(
                     videoParameters,
                     QString::fromStdString(config.modelPath),
+                    LdzeugDecoderBase::Mode::Field,
                     QString::fromStdString(config.onnxProvider));
             } catch (const std::exception &e) {
                 lastError = QStringLiteral(
@@ -339,26 +344,34 @@ bool TbcReader::configureDecoder() {
             break;
         }
 
-        case DecoderType::Ldzeug2LumaSep: {
+        case DecoderType::Ldzeug2LumaSep:
+        case DecoderType::Ldzeug2LumaSepFrame: {
+            const bool frameMode = (decoder == DecoderType::Ldzeug2LumaSepFrame);
+            const char *decoderName = frameMode
+                ? "ldzeug2_luma_sep_frame" : "ldzeug2_luma_sep";
             ldzeugLumaSep = std::make_unique<LdzeugLumaSepDecoder>();
-            const QString modelPath = QString::fromStdString(config.modelPath);
-            ldzeugLumaSep->setMode(lumaSepModeFromModelPath(modelPath));
+            ldzeugLumaSep->setChromaPhase(config.chromaPhase);
+            ldzeugLumaSep->setChromaGain(config.chromaGain);
+            ldzeugLumaSep->setChromaBandpass(config.modelChromaBandpass);
             try {
                 ldzeugLumaSep->configure(
                     videoParameters,
-                    modelPath,
+                    QString::fromStdString(config.modelPath),
+                    frameMode ? LdzeugDecoderBase::Mode::Frame
+                              : LdzeugDecoderBase::Mode::Field,
                     QString::fromStdString(config.onnxProvider));
             } catch (const std::exception &e) {
-                lastError = QStringLiteral(
-                    "ldzeug2_luma_sep: failed to load ONNX model: %1")
-                    .arg(QString::fromUtf8(e.what()));
+                lastError = QStringLiteral("%1: failed to load ONNX model: %2")
+                    .arg(QString::fromLatin1(decoderName),
+                         QString::fromUtf8(e.what()));
                 return false;
             }
             lookBehind = 0;
             lookAhead = 0;
-            qInfo() << "Using ldzeug2_luma_sep decoder (mode:"
-                    << (ldzeugLumaSep->getLookBehind() == 0 ? "field/frame" : "?")
-                    << ")";
+            qInfo() << "Using" << decoderName << "decoder"
+                    << "chromaPhase:" << config.chromaPhase
+                    << "chromaGain:" << config.chromaGain
+                    << "chromaBandpass:" << config.modelChromaBandpass;
             break;
         }
 
@@ -676,11 +689,16 @@ bool TbcReader::decodeFrame(int frameNumber, ComponentFrame &frame,
             break;
 
         case DecoderType::Ldzeug2LumaSep:
+        case DecoderType::Ldzeug2LumaSepFrame:
             try {
                 ldzeugLumaSep->decodeFrames(fields, startIndex, endIndex, componentFrames);
             } catch (const std::exception &e) {
-                lastError = QStringLiteral("ldzeug2_luma_sep decode failed: %1")
-                                .arg(QString::fromUtf8(e.what()));
+                const char *decoderName =
+                    activeDecoder == DecoderType::Ldzeug2LumaSepFrame
+                        ? "ldzeug2_luma_sep_frame" : "ldzeug2_luma_sep";
+                lastError = QStringLiteral("%1 decode failed: %2")
+                    .arg(QString::fromLatin1(decoderName),
+                         QString::fromUtf8(e.what()));
                 return false;
             }
             break;
