@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Idempotently patch the tbc-tools submodule for vapoursynth-analog.
 
-Three changes are required against harrypm/tbc-tools' ld-chroma-decoder:
+Two changes are required against harrypm/tbc-tools' ld-chroma-decoder:
 
-1. Add a ``QString nnModelPath`` field to ``Comb::Configuration``. This lets us
-   feed the ONNX model path through at runtime instead of relying on the
-   embedded ``chroma_net_v2_onnx_data.h`` byte blob the upstream CMake
-   generates.
-2. Make the CPU/non-CUDA execution-provider path in ``Comb::FrameBuffer::
-   split3DnnTransform`` load the ONNX session from ``configuration.nnModelPath``
-   when set, falling back to the embedded blob only if the path is empty *and*
-   the build defines ``VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB``. We don't
-   generate the blob at all by default so the fallback would error out cleanly
-   if reached.
-3. Try the CoreML execution provider before falling back to CPU on macOS.
+1. Add ``QString nnModelPath`` and ``QString nnProvider`` fields to
+   ``Comb::Configuration``. The model path lets us feed the ONNX file
+   through at runtime instead of relying on the embedded
+   ``chroma_net_v2_onnx_data.h`` byte blob the upstream CMake generates;
+   ``nnProvider`` is a per-instance override for the execution provider
+   that would otherwise come from the ``LDDECODE_NNTRANSFORM3D_PROVIDER``
+   env var.
+2. In ``Comb::FrameBuffer::split3DnnTransform``, honor those fields:
+   load the session from ``configuration.nnModelPath`` when set (falling
+   back to the embedded blob only if compiled with
+   ``VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB``), and map
+   ``configuration.nnProvider`` onto upstream's
+   ``NnExecutionProviderPreference`` enum (``cpu``/``cuda``/``gpu``/``coreml``).
 
 Each sub-patch checks for its own anchor and is independently idempotent;
 re-running on already-patched files is a no-op.
@@ -24,7 +26,6 @@ import sys
 from pathlib import Path
 
 PATCH_MARKER = "// vsanalog-nn-model-path-patch"
-COREML_MARKER = "// vsanalog-coreml-patch"
 PROVIDER_MARKER = "// vsanalog-nn-provider-patch"
 
 
@@ -87,20 +88,23 @@ def patch_comb_cpp_model_path(text: str) -> tuple[str, bool]:
     )
     if old_include not in text:
         raise RuntimeError(
-            f"comb.cpp: anchor for embedded blob include not found in {path}"
+            "comb.cpp: anchor for embedded blob include not found"
         )
     text = text.replace(old_include, new_include, 1)
 
-    # 2) Allow the std::call_once lambda to access ``configuration``.
+    # 2) Allow the std::call_once lambda to access ``configuration``. The
+    #    inner ``tryCreateSession`` lambda uses ``[&]`` so it inherits.
     old_callonce = "    std::call_once(onnxInitOnce, []() {"
     new_callonce = "    std::call_once(onnxInitOnce, [this]() {"
     if old_callonce not in text:
         raise RuntimeError(
-            f"comb.cpp: anchor for onnx call_once lambda not found in {path}"
+            "comb.cpp: anchor for onnx call_once lambda not found"
         )
     text = text.replace(old_callonce, new_callonce, 1)
 
-    # 3) Replace the byte-blob session creation with a path-first fallback.
+    # 3) Replace the byte-blob session creation (inside the
+    #    ``tryCreateSession`` lambda) with a path-first / blob-fallback
+    #    dispatch.
     old_session = (
         "                    ortSession = std::make_unique<Ort::Session>(\n"
         "                        *ortEnv,\n"
@@ -152,53 +156,15 @@ def patch_comb_cpp_model_path(text: str) -> tuple[str, bool]:
     return text, True
 
 
-def patch_comb_cpp_coreml(text: str) -> tuple[str, bool]:
-    if COREML_MARKER in text:
-        return text, False
-
-    old_block = (
-        "            if (!onnxReady) {\n"
-        "                Ort::SessionOptions cpuOptions;\n"
-        "                configureSessionOptions(cpuOptions);\n"
-        "                tryCreateSession(cpuOptions, QStringLiteral(\"CPU\"));\n"
-        "            }"
-    )
-    new_block = (
-        "            // " + COREML_MARKER + "\n"
-        "#if defined(__APPLE__)\n"
-        "            if (!onnxReady) {\n"
-        "                Ort::SessionOptions coremlOptions;\n"
-        "                configureSessionOptions(coremlOptions);\n"
-        "                try {\n"
-        "                    coremlOptions.AppendExecutionProvider(\"CoreML\", {{\"MLComputeUnits\", \"ALL\"}, {\"ModelFormat\", \"MLProgram\"}});\n"
-        "                    tryCreateSession(coremlOptions, QStringLiteral(\"CoreML\"));\n"
-        "                } catch (const std::exception &vsCoreMLErr) {\n"
-        "                    qWarning() << \"nnTransform3D CoreML EP unavailable:\"\n"
-        "                               << vsCoreMLErr.what();\n"
-        "                }\n"
-        "            }\n"
-        "#endif\n"
-        "            if (!onnxReady) {\n"
-        "                Ort::SessionOptions cpuOptions;\n"
-        "                configureSessionOptions(cpuOptions);\n"
-        "                tryCreateSession(cpuOptions, QStringLiteral(\"CPU\"));\n"
-        "            }"
-    )
-    if old_block not in text:
-        raise RuntimeError(
-            "comb.cpp: anchor for CPU fallback block not found"
-        )
-    return text.replace(old_block, new_block, 1), True
-
-
 def patch_comb_cpp_provider_override(text: str) -> tuple[str, bool]:
-    """Allow ``configuration.nnProvider`` to override the env-var-derived
-    provider preference. Also gate our CoreML attempt on the override."""
+    """Map ``configuration.nnProvider`` onto upstream's
+    ``NnExecutionProviderPreference`` enum, overriding the env-var-derived
+    preference when non-empty."""
     if PROVIDER_MARKER in text:
         return text, False
 
-    # 1) Drop the ``const`` qualifier off providerPreference and inject the
-    #    override block immediately after it.
+    # Drop the ``const`` qualifier off providerPreference and inject the
+    # override block immediately after it.
     old_pref = (
         "            const NnExecutionProviderPreference providerPreference "
         "= getNnExecutionProviderPreference();"
@@ -212,42 +178,24 @@ def patch_comb_cpp_provider_override(text: str) -> tuple[str, bool]:
         "                providerPreference = NnExecutionProviderPreference::Cpu;\n"
         "            } else if (vsCfgProvider == \"cuda\" || vsCfgProvider == \"gpu\") {\n"
         "                providerPreference = NnExecutionProviderPreference::Cuda;\n"
+        "            } else if (vsCfgProvider == \"coreml\") {\n"
+        "                providerPreference = NnExecutionProviderPreference::CoreML;\n"
         "            }"
     )
     if old_pref not in text:
         raise RuntimeError(
             "comb.cpp: anchor for providerPreference declaration not found"
         )
-    text = text.replace(old_pref, new_pref, 1)
-
-    # 2) Gate the CoreML attempt on nn_provider != "cpu".
-    old_coreml_gate = (
-        "#if defined(__APPLE__)\n"
-        "            if (!onnxReady) {\n"
-        "                Ort::SessionOptions coremlOptions;"
-    )
-    new_coreml_gate = (
-        "#if defined(__APPLE__)\n"
-        "            if (!onnxReady && vsCfgProvider != \"cpu\") {\n"
-        "                Ort::SessionOptions coremlOptions;"
-    )
-    if old_coreml_gate not in text:
-        raise RuntimeError(
-            "comb.cpp: anchor for CoreML gate not found (CoreML patch missing?)"
-        )
-    text = text.replace(old_coreml_gate, new_coreml_gate, 1)
-
-    return text, True
+    return text.replace(old_pref, new_pref, 1), True
 
 
 def patch_comb_cpp(path: Path) -> bool:
     text = path.read_text()
     text, changed_mp = patch_comb_cpp_model_path(text)
-    text, changed_cm = patch_comb_cpp_coreml(text)
     text, changed_pp = patch_comb_cpp_provider_override(text)
-    if changed_mp or changed_cm or changed_pp:
+    if changed_mp or changed_pp:
         path.write_text(text)
-    return changed_mp or changed_cm or changed_pp
+    return changed_mp or changed_pp
 
 
 def main(argv: list[str]) -> int:
