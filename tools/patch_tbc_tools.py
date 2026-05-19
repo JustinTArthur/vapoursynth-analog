@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Idempotently patch the tbc-tools submodule for vapoursynth-analog.
 
-Two changes are required against harrypm/tbc-tools' ld-chroma-decoder:
+Three changes are required against harrypm/tbc-tools' ld-chroma-decoder:
 
 1. Add ``QString nnModelPath`` and ``QString nnProvider`` fields to
    ``Comb::Configuration``. The model path lets us feed the ONNX file
@@ -16,6 +16,12 @@ Two changes are required against harrypm/tbc-tools' ld-chroma-decoder:
    ``VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB``), and map
    ``configuration.nnProvider`` onto upstream's
    ``NnExecutionProviderPreference`` enum (``cpu``/``cuda``/``gpu``/``coreml``).
+3. Reload the static ONNX session when ``configuration.nnModelPath``
+   changes. Upstream uses ``std::call_once`` to initialize a single
+   process-wide session, which made sense when the only weights source
+   was the embedded blob. With runtime-supplied model paths, two
+   ``nntransform3d`` filter instances pointing at different ``.onnx``
+   files would otherwise share whichever session loaded first.
 
 Each sub-patch checks for its own anchor and is independently idempotent;
 re-running on already-patched files is a no-op.
@@ -27,6 +33,7 @@ from pathlib import Path
 
 PATCH_MARKER = "// vsanalog-nn-model-path-patch"
 PROVIDER_MARKER = "// vsanalog-nn-provider-patch"
+RELOAD_MARKER = "// vsanalog-nn-session-reload-patch"
 
 
 def patch_comb_h(path: Path) -> bool:
@@ -189,13 +196,71 @@ def patch_comb_cpp_provider_override(text: str) -> tuple[str, bool]:
     return text.replace(old_pref, new_pref, 1), True
 
 
+def patch_comb_cpp_session_reload(text: str) -> tuple[str, bool]:
+    """Make the static ONNX session reload when ``configuration.nnModelPath``
+    changes from one ``split3DnnTransform`` call to the next, instead of
+    locking the first-loaded model in for the process lifetime.
+
+    Strategy: replace ``std::once_flag`` with a unique_ptr that can be
+    re-created on path change, and gate the reset on a separate mutex
+    that also blocks during in-flight inference so we don't free a
+    session another thread is mid-Run on.
+    """
+    if RELOAD_MARKER in text:
+        return text, False
+
+    # 1) Promote onnxInitOnce to a unique_ptr so it can be replaced when
+    #    the requested model path changes.
+    old_once_decl = "    static std::once_flag onnxInitOnce;"
+    new_once_decl = (
+        "    // " + RELOAD_MARKER + "\n"
+        "    static std::unique_ptr<std::once_flag> onnxInitOnce "
+        "= std::make_unique<std::once_flag>();"
+    )
+    if old_once_decl not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for onnxInitOnce declaration not found"
+        )
+    text = text.replace(old_once_decl, new_once_decl, 1)
+
+    # 2) Insert a path-tracking reset block immediately before the
+    #    std::call_once invocation, and dereference the unique_ptr in
+    #    the invocation itself. ``patch_comb_cpp_model_path`` runs before
+    #    this and rewrites the lambda capture to ``[this]``, so we
+    #    anchor on the post-model-path-patch form.
+    old_call = "    std::call_once(onnxInitOnce, [this]() {"
+    new_call = (
+        "    static QString onnxLoadedModelPath;\n"
+        "    static std::mutex onnxResetMutex;\n"
+        "    {\n"
+        "        std::lock_guard<std::mutex> resetLock(onnxResetMutex);\n"
+        "        if (onnxLoadedModelPath != configuration.nnModelPath) {\n"
+        "            std::lock_guard<std::mutex> runLock(onnxRunMutex);\n"
+        "            onnxInitOnce = std::make_unique<std::once_flag>();\n"
+        "            ortSession.reset();\n"
+        "            onnxReady = false;\n"
+        "            onnxLoadedModelPath = configuration.nnModelPath;\n"
+        "        }\n"
+        "    }\n"
+        "    std::call_once(*onnxInitOnce, [this]() {"
+    )
+    if old_call not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for std::call_once invocation not found"
+        )
+    text = text.replace(old_call, new_call, 1)
+
+    return text, True
+
+
 def patch_comb_cpp(path: Path) -> bool:
     text = path.read_text()
     text, changed_mp = patch_comb_cpp_model_path(text)
     text, changed_pp = patch_comb_cpp_provider_override(text)
-    if changed_mp or changed_pp:
+    text, changed_sr = patch_comb_cpp_session_reload(text)
+    if changed_mp or changed_pp or changed_sr:
         path.write_text(text)
-    return changed_mp or changed_pp
+    return changed_mp or changed_pp or changed_sr
 
 
 def main(argv: list[str]) -> int:
