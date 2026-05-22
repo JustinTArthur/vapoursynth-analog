@@ -644,7 +644,17 @@ jobs:
           # delvewheel needs --analyze-existing to inspect it; --namespace-pkg
           # keeps it from minting __init__.py files inside vapoursynth/.
           # --add-dll forces inclusion of providers_shared, which ORT loads via dynamic discovery for CUDA/TRT providers.
-          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-dll "onnxruntime_providers_shared.dll" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin;C:/onnxruntime/lib" $wheel -w wheelhouse/
+          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog" --add-dll "onnxruntime_providers_shared.dll" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin;C:/onnxruntime/lib" $wheel -w repaired/
+
+      - name: Co-locate bundled DLLs with the plugin
+        shell: pwsh
+        run: |
+          # delvewheel vendors the dependency DLLs into a top-level
+          # vsanalog.libs/ reachable only via an `import vsanalog` patch, which
+          # VapourSynth's plugin autoloader never runs. Move them next to
+          # vsanalog.dll so the loader resolves them directly.
+          $repaired = Get-ChildItem repaired/*.whl | Select-Object -First 1
+          python tools/colocate_plugin_libs.py $repaired wheelhouse/
           python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
       - name: Upload wheel

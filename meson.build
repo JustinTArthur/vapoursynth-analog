@@ -237,12 +237,15 @@ vsanalog_sources = files(
 
 vsanalog_inc = include_directories('src')
 
-# When building as a wheel, install to vapoursynth/plugins/ in site-packages
-# so the plugin is auto-loaded by VapourSynth's site-packages plugin discovery.
+# When building as a wheel, install into a dedicated subdirectory of
+# vapoursynth/plugins/ in site-packages, alongside a manifest.vs. VapourSynth
+# honours a manifest in a plugin subdirectory and loads only the plugin it
+# names so the autoloader never probes the co-bundled dependency DLLs.
 # Otherwise, install to VapourSynth's system plugin directory via pkg-config.
 if get_option('build_wheel')
     py = import('python').find_installation(pure: false)
-    plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins'
+    plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins' / 'vsanalog'
+    install_data('manifest.vs', install_dir: plugin_install_dir)
     subdir('python/vsanalog')
 else
     plugin_install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'

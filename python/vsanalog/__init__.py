@@ -100,7 +100,10 @@ def _get_plugin_path() -> Path:
     """Derive the filesystem path of the bundled vsanalog shared library."""
     suffix = {"Windows": ".dll", "Darwin": ".dylib"}.get(platform.system(), ".so")
     _packages_root = Path(__file__).resolve().parent.parent
-    return _packages_root / "vapoursynth" / "plugins" / f"vsanalog{suffix}"
+    return (
+        _packages_root / "vapoursynth" / "plugins" / "vsanalog"
+        / f"vsanalog{suffix}"
+    )
 
 
 def _ensure_plugin_loaded() -> None:
