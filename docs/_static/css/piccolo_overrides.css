@@ -33,3 +33,10 @@ div#right_sidebar {
     margin-right: 0;
   }
 }
+
+/* readthedocs-addons.js mistakes the Piccolo theme for sphinx_rtd_theme and
+   sets the fixed-footer ad's height as inline padding-bottom on the header
+   nav. Override the non-!important inline style back to the theme's value. */
+div#top_nav nav {
+  padding-bottom: 1rem !important;
+}
