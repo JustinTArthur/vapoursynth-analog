@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Idempotently patch the tbc-tools submodule for vapoursynth-analog.
 
-Three changes are required against harrypm/tbc-tools' ld-chroma-decoder:
+Five changes are required against harrypm/tbc-tools' ld-chroma-decoder:
 
-1. Add ``QString nnModelPath`` and ``QString nnProvider`` fields to
-   ``Comb::Configuration``. The model path lets us feed the ONNX file
-   through at runtime instead of relying on the embedded
-   ``chroma_net_v2_onnx_data.h`` byte blob the upstream CMake generates;
-   ``nnProvider`` is a per-instance override for the execution provider
-   that would otherwise come from the ``LDDECODE_NNTRANSFORM3D_PROVIDER``
-   env var.
+1. Add ``QString nnModelPath``, ``QString nnProvider``, and
+   ``double nnInputMagnitudeScale`` fields to ``Comb::Configuration``. The
+   model path lets us feed the ONNX file through at runtime instead of
+   relying on the embedded ``chroma_net_v2_onnx_data.h`` byte blob the
+   upstream CMake generates; ``nnProvider`` is a per-instance override for
+   the execution provider that would otherwise come from the
+   ``LDDECODE_NNTRANSFORM3D_PROVIDER`` env var; ``nnInputMagnitudeScale``
+   is the divisor the loaded model's training contract expects on its
+   input magnitude spectrum.
 2. In ``Comb::FrameBuffer::split3DnnTransform``, honor those fields:
    load the session from ``configuration.nnModelPath`` when set (falling
    back to the embedded blob only if compiled with
@@ -22,6 +24,19 @@ Three changes are required against harrypm/tbc-tools' ld-chroma-decoder:
    was the embedded blob. With runtime-supplied model paths, two
    ``nntransform3d`` filter instances pointing at different ``.onnx``
    files would otherwise share whichever session loaded first.
+4. Divide the model's input magnitude spectrum by
+   ``configuration.nnInputMagnitudeScale``. The nnTransform3D v2 weights
+   were trained on inputs scaled down by 128; feeding them unscaled
+   magnitudes gives the network out-of-distribution input.
+5. Stop ``ensureWindowsOnnxCudaProviderLoaded``'s probe from cold-loading
+   ORT's provider DLLs. The probe ``LoadLibrary``s
+   ``onnxruntime_providers_cuda.dll`` to test for CUDA; that runs the
+   provider's ``DllMain`` static initializers before ORT's provider host
+   is set, so the provider's overridden ``operator new`` dereferences a
+   null host and the load faults with ``ERROR_DLL_INIT_FAILED``. The probe
+   then wrongly reports CUDA unavailable and the decoder silently falls
+   back to CPU. ORT loads the provider correctly itself when the CUDA EP
+   is appended, so the probe must not pre-empt it.
 
 Each sub-patch checks for its own anchor and is independently idempotent;
 re-running on already-patched files is a no-op.
@@ -34,6 +49,8 @@ from pathlib import Path
 PATCH_MARKER = "// vsanalog-nn-model-path-patch"
 PROVIDER_MARKER = "// vsanalog-nn-provider-patch"
 RELOAD_MARKER = "// vsanalog-nn-session-reload-patch"
+SCALE_MARKER = "// vsanalog-nn-input-scale-patch"
+COLDLOAD_MARKER = "// vsanalog-nn-provider-coldload-patch"
 
 
 def patch_comb_h(path: Path) -> bool:
@@ -76,6 +93,25 @@ def patch_comb_h(path: Path) -> bool:
         text = text.replace(needle, insertion, 1)
         changed = True
 
+    if SCALE_MARKER not in text:
+        # Insert ``double nnInputMagnitudeScale`` alongside nnProvider.
+        needle = "        QString nnProvider;"
+        insertion = (
+            "        QString nnProvider;\n\n"
+            "        " + SCALE_MARKER + "\n"
+            "        // Divisor applied to the model's input magnitude\n"
+            "        // spectrum. nnTransform3D v2 was trained on inputs\n"
+            "        // scaled down by 128; v1 expects raw magnitudes (1.0).\n"
+            "        double nnInputMagnitudeScale = 1.0;"
+        )
+        if needle not in text:
+            raise RuntimeError(
+                f"comb.h: anchor for nnInputMagnitudeScale insertion not "
+                f"found in {path}"
+            )
+        text = text.replace(needle, insertion, 1)
+        changed = True
+
     if changed:
         path.write_text(text)
     return changed
@@ -88,7 +124,7 @@ def patch_comb_cpp_model_path(text: str) -> tuple[str, bool]:
     # 1) Make the embedded-blob include conditional.
     old_include = '#include "chroma_net_v2_onnx_data.h"'
     new_include = (
-        "// " + PATCH_MARKER + " - embedded blob disabled by default\n"
+        PATCH_MARKER + " - embedded blob disabled by default\n"
         "#if defined(VSANALOG_USE_EMBEDDED_CHROMA_NET_BLOB)\n"
         + old_include
         + "\n#endif"
@@ -121,7 +157,7 @@ def patch_comb_cpp_model_path(text: str) -> tuple[str, bool]:
         "                    );"
     )
     new_session = (
-        "                    // " + PATCH_MARKER + "\n"
+        "                    " + PATCH_MARKER + "\n"
         "                    if (!configuration.nnModelPath.isEmpty()) {\n"
         "#ifdef _WIN32\n"
         "                        const std::wstring vsModelPath =\n"
@@ -177,7 +213,7 @@ def patch_comb_cpp_provider_override(text: str) -> tuple[str, bool]:
         "= getNnExecutionProviderPreference();"
     )
     new_pref = (
-        "            // " + PROVIDER_MARKER + "\n"
+        "            " + PROVIDER_MARKER + "\n"
         "            NnExecutionProviderPreference providerPreference "
         "= getNnExecutionProviderPreference();\n"
         "            const QString vsCfgProvider = configuration.nnProvider.trimmed().toLower();\n"
@@ -213,7 +249,7 @@ def patch_comb_cpp_session_reload(text: str) -> tuple[str, bool]:
     #    the requested model path changes.
     old_once_decl = "    static std::once_flag onnxInitOnce;"
     new_once_decl = (
-        "    // " + RELOAD_MARKER + "\n"
+        "    " + RELOAD_MARKER + "\n"
         "    static std::unique_ptr<std::once_flag> onnxInitOnce "
         "= std::make_unique<std::once_flag>();"
     )
@@ -253,14 +289,112 @@ def patch_comb_cpp_session_reload(text: str) -> tuple[str, bool]:
     return text, True
 
 
+def patch_comb_cpp_input_scale(text: str) -> tuple[str, bool]:
+    """Divide the model's input magnitude spectrum by
+    ``configuration.nnInputMagnitudeScale``. The reflected-magnitude channel
+    is built by indexing back into the same ``magnitudes`` buffer, so scaling
+    it once at computation covers both input channels."""
+    if SCALE_MARKER in text:
+        return text, False
+
+    old_loop = (
+        "            for (qint32 i = 0; i < Nt * Ny * Nx; i++) {\n"
+        "                magnitudes[i] = sqrtf(static_cast<float>("
+        "(out[i][0] * out[i][0]) + (out[i][1] * out[i][1])));\n"
+        "            }"
+    )
+    new_loop = (
+        "            " + SCALE_MARKER + "\n"
+        "            const float vsMagScale = (configuration.nnInputMagnitudeScale > 0.0)\n"
+        "                ? static_cast<float>(1.0 / configuration.nnInputMagnitudeScale)\n"
+        "                : 1.0f;\n"
+        "            for (qint32 i = 0; i < Nt * Ny * Nx; i++) {\n"
+        "                magnitudes[i] = sqrtf(static_cast<float>("
+        "(out[i][0] * out[i][0]) + (out[i][1] * out[i][1]))) * vsMagScale;\n"
+        "            }"
+    )
+    if old_loop not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for the magnitude-computation loop not found"
+        )
+    return text.replace(old_loop, new_loop, 1), True
+
+
+def patch_comb_cpp_provider_coldload(text: str) -> tuple[str, bool]:
+    """Stop the Windows CUDA-provider probe from cold-loading ORT's
+    provider DLLs.
+
+    ``ensureWindowsOnnxCudaProviderLoaded`` probes for CUDA support by
+    calling ``LoadLibraryW`` on ``onnxruntime_providers_shared.dll`` and
+    ``onnxruntime_providers_cuda.dll``. That is fatal: ONNX Runtime's
+    provider DLLs override ``operator new`` to route allocations through a
+    provider host pointer that is only set when ORT loads the provider
+    itself (via ``ProviderLibrary::Load``, which initializes
+    ``providers_shared`` and performs the host handshake first). A bare
+    ``LoadLibrary`` runs ``providers_cuda``'s ``DllMain`` static
+    initializers — e.g. the file-scope ``ort_triton_kernel_group_map``
+    ``std::unordered_map`` in ``triton_kernel.cu`` — before the host
+    exists; ``operator new`` then dereferences a null host pointer and the
+    load faults with ``ERROR_DLL_INIT_FAILED``. The probe reports CUDA as
+    unavailable and the decoder silently falls back to CPU.
+
+    Fix: neuter the ``tryLoadLibrary`` lambda so it never calls
+    ``LoadLibrary`` and always reports success. The probe then no longer
+    pre-empts ORT, which loads the provider the correct way when the CUDA
+    EP is appended (``SessionOptionsAppendExecutionProvider_CUDA_V2``) and
+    reports a clean status if it is genuinely unavailable.
+    """
+    if COLDLOAD_MARKER in text:
+        return text, False
+
+    old_try = (
+        "        auto tryLoadLibrary = [&](const QString &libraryPath, "
+        "QString &loadError) -> bool {\n"
+        "            HMODULE module = LoadLibraryW("
+        "reinterpret_cast<LPCWSTR>(libraryPath.utf16()));\n"
+        "            if (module != nullptr) {\n"
+        "                return true;\n"
+        "            }\n"
+        "\n"
+        "            loadError = formatWindowsError(GetLastError());\n"
+        "            return false;\n"
+        "        };"
+    )
+    new_try = (
+        "        " + COLDLOAD_MARKER + "\n"
+        "        // Never LoadLibrary an ONNX Runtime provider DLL. Cold-loading\n"
+        "        // onnxruntime_providers_cuda.dll runs its DllMain static\n"
+        "        // initializers (e.g. the ort_triton_kernel_group_map global)\n"
+        "        // before ORT's provider host is set; its overridden operator\n"
+        "        // new then dereferences a null host and the load faults with\n"
+        "        // ERROR_DLL_INIT_FAILED. ORT loads the provider correctly\n"
+        "        // itself when the CUDA EP is appended; this probe must not\n"
+        "        // pre-empt it, so report every candidate as loadable.\n"
+        "        auto tryLoadLibrary = [&](const QString &libraryPath, "
+        "QString &loadError) -> bool {\n"
+        "            Q_UNUSED(libraryPath);\n"
+        "            Q_UNUSED(loadError);\n"
+        "            Q_UNUSED(formatWindowsError);\n"
+        "            return true;\n"
+        "        };"
+    )
+    if old_try not in text:
+        raise RuntimeError(
+            "comb.cpp: anchor for the tryLoadLibrary lambda not found"
+        )
+    return text.replace(old_try, new_try, 1), True
+
+
 def patch_comb_cpp(path: Path) -> bool:
     text = path.read_text()
     text, changed_mp = patch_comb_cpp_model_path(text)
     text, changed_pp = patch_comb_cpp_provider_override(text)
     text, changed_sr = patch_comb_cpp_session_reload(text)
-    if changed_mp or changed_pp or changed_sr:
+    text, changed_is = patch_comb_cpp_input_scale(text)
+    text, changed_cl = patch_comb_cpp_provider_coldload(text)
+    if changed_mp or changed_pp or changed_sr or changed_is or changed_cl:
         path.write_text(text)
-    return changed_mp or changed_pp or changed_sr
+    return changed_mp or changed_pp or changed_sr or changed_is or changed_cl
 
 
 def main(argv: list[str]) -> int:

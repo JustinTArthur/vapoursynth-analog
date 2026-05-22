@@ -31,6 +31,7 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
         config.modelPath = opts->modelPath;
         config.onnxProvider = opts->onnxProvider;
         config.modelChromaBandpass = opts->modelChromaBandpass;
+        config.modelInputScale = opts->modelInputScale;
         if (!opts->decoder.empty()) {
             config.decoder = TbcReader::parseDecoderName(
                 QString::fromStdString(opts->decoder));

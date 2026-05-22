@@ -29,25 +29,32 @@ _MODELS_DIR = Path(__file__).resolve().parent / "models"
 
 
 # Registry of neural-network-based decoders. Keyed by the lowercase decoder
-# string accepted by the plugin. Each entry describes how to resolve a
-# user-supplied ``model_version`` to a bundled .onnx file path.
+# string accepted by the plugin. Each entry maps a ``model_version`` to a
+# ``(bundled .onnx path, input-magnitude scale)`` pair.
+#
+# The input-magnitude scale is the divisor a model's training contract
+# expects on its input magnitude spectrum. nnTransform3D v2 was trained on
+# inputs divided by 128 (headroom for its FP16 inference path); every other
+# bundled model uses raw magnitudes (1.0). The wrapper resolves both the
+# path and the scale and passes them to the plugin, which stays version-
+# agnostic — it just receives a model path and a scale.
 #
 # To add a new neural decoder later, append an entry here and (in C++) add a
-# matching ``DecoderType`` value plus the ``parseDecoderName`` mapping. The
-# rest of the wrapper plumbing — kwargs, validation, model resolution — is
-# version-agnostic.
-_NN_DECODERS: dict[str, dict[str, Path]] = {
+# matching ``DecoderType`` value plus the ``parseDecoderName`` mapping.
+_NN_DECODERS: dict[str, dict[str, tuple[Path, float]]] = {
     "nntransform3d": {
         # Author's original v1/v2 designations. Note that tbc-tools' on-disk
         # filenames historically had these swapped; we use the author's
         # designations regardless.
-        "v1": _MODELS_DIR / "nntransform3d_v1.onnx",
-        "v2": _MODELS_DIR / "nntransform3d_v2.onnx",
+        "v1": (_MODELS_DIR / "nntransform3d_v1.onnx", 1.0),
+        "v2": (_MODELS_DIR / "nntransform3d_v2.onnx", 128.0),
     },
     # ldzeug2 NN luma extractor, per-field model. Version tags mirror
     # jsaowji's source filenames so each version's artifact is unambiguous.
     "ldzeug2_luma_sep": {
-        "2dgray_fields": _MODELS_DIR / "ldzeug2_luma_sep_2dgray_fields.onnx",
+        "2dgray_fields": (
+            _MODELS_DIR / "ldzeug2_luma_sep_2dgray_fields.onnx", 1.0
+        ),
     },
     # ldzeug2 NN luma extractor, weaved-frame model. Separate decoder name
     # because frame and field are different input pipelines, not just
@@ -55,18 +62,19 @@ _NN_DECODERS: dict[str, dict[str, Path]] = {
     # so the plugin can't infer mode from the model alone.
     "ldzeug2_luma_sep_frame": {
         "2d_frame_gray_gray_run2_latest": (
-            _MODELS_DIR / "ldzeug2_luma_sep_2d_frame_gray_gray_run2_latest.onnx"
+            _MODELS_DIR / "ldzeug2_luma_sep_2d_frame_gray_gray_run2_latest.onnx",
+            1.0,
         ),
     },
     # ldzeug2 joint Y/C separator + chroma demodulator. Version tags mirror
     # jsaowji's source filenames (with the redundant ``color_cnn_`` prefix
     # dropped since the decoder name conveys it).
     "ldzeug2_color_cnn": {
-        "1031640": _MODELS_DIR / "ldzeug2_color_cnn_1031640.onnx",
+        "1031640": (_MODELS_DIR / "ldzeug2_color_cnn_1031640.onnx", 1.0),
         "denoise_613928_ft22k": (
-            _MODELS_DIR / "ldzeug2_color_cnn_denoise_613928_ft22k.onnx"
+            _MODELS_DIR / "ldzeug2_color_cnn_denoise_613928_ft22k.onnx", 1.0
         ),
-        "v2_alot": _MODELS_DIR / "ldzeug2_color_cnn_v2_alot.onnx",
+        "v2_alot": (_MODELS_DIR / "ldzeug2_color_cnn_v2_alot.onnx", 1.0),
     },
 }
 
@@ -118,16 +126,19 @@ def requires_plugin(func: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
-def _resolve_nn_model_path(
+def _resolve_nn_model(
     decoder: str,
     model_version: str | None,
     model_path: str | Path | None,
-) -> str:
-    """Resolve a neural decoder's model location to an absolute path string.
+) -> tuple[str, float]:
+    """Resolve a neural decoder's model to an ``(absolute path, scale)`` pair.
 
-    Either ``model_path`` (explicit override) or ``model_version`` (selects a
-    bundled file) must produce a usable path. ``model_path`` wins when both
-    are supplied.
+    ``scale`` is the input-magnitude divisor the model expects. Either
+    ``model_path`` (explicit override) or ``model_version`` (selects a
+    bundled file) must produce a usable path; ``model_path`` wins when both
+    are supplied. Custom ``model_path`` weights carry no registry metadata,
+    so their scale defaults to ``1.0`` — override it with the
+    ``model_input_scale`` kwarg if the weights need a different one.
     """
     if model_path is not None:
         resolved = Path(model_path).expanduser()
@@ -135,7 +146,7 @@ def _resolve_nn_model_path(
             raise FileNotFoundError(
                 f"model_path {resolved} does not exist or is not a regular file"
             )
-        return str(resolved)
+        return str(resolved), 1.0
 
     versions = _NN_DECODERS[decoder]
     if model_version is None:
@@ -146,13 +157,13 @@ def _resolve_nn_model_path(
             f"Unknown model_version {model_version!r} for decoder {decoder!r}. "
             f"Valid versions: {valid}."
         )
-    bundled = versions[model_version]
+    bundled, scale = versions[model_version]
     if not bundled.is_file():
         raise FileNotFoundError(
             f"Bundled model file not found at {bundled}. The vsanalog "
             "package may be incomplete; reinstall the wheel."
         )
-    return str(bundled)
+    return str(bundled), scale
 
 
 @requires_plugin
@@ -164,6 +175,7 @@ def decode_4fsc_video(
     decoder: str | None = None,
     model_version: str | None = None,
     model_path: str | Path | None = None,
+    model_input_scale: float | None = None,
     onnx_provider: str | None = None,
     model_chroma_bandpass: bool | None = None,
     reverse_fields: bool = False,
@@ -205,6 +217,12 @@ def decode_4fsc_video(
     samples through a 17-tap low-pass FIR before deriving U/V — mirroring
     jsaowji's ``comb_split_already(..., color_bp=True)``. Set ``False`` to
     skip the filter.
+
+    ``model_input_scale`` divides the model's input magnitude spectrum. For
+    bundled models it is selected automatically per ``model_version`` (the
+    ``nntransform3d`` ``v2`` weights need ``128``; everything else needs
+    ``1``), so callers normally leave it unset. Supply it only with a custom
+    ``model_path`` whose weights were trained against a scaled input.
     """
     kwargs: dict[str, Any] = {}
 
@@ -212,12 +230,18 @@ def decode_4fsc_video(
     is_nn_decoder = decoder_lower in _NN_DECODERS
 
     if not is_nn_decoder and (
-        model_version is not None or model_path is not None or onnx_provider is not None
+        model_version is not None or model_path is not None
+        or onnx_provider is not None or model_input_scale is not None
     ):
         valid = ", ".join(sorted(_NN_DECODERS))
         raise ValueError(
-            "model_version, model_path, and onnx_provider are only meaningful "
-            f"for neural-network decoders ({valid}); set decoder= first."
+            "model_version, model_path, onnx_provider, and model_input_scale "
+            f"are only meaningful for neural-network decoders ({valid}); "
+            "set decoder= first."
+        )
+    if model_input_scale is not None and model_input_scale <= 0:
+        raise ValueError(
+            f"model_input_scale must be positive, got {model_input_scale!r}."
         )
     if model_chroma_bandpass is not None and decoder_lower not in {
         "ldzeug2_luma_sep", "ldzeug2_luma_sep_frame",
@@ -227,9 +251,16 @@ def decode_4fsc_video(
             "decoder='ldzeug2_luma_sep' or 'ldzeug2_luma_sep_frame'."
         )
     if is_nn_decoder:
-        kwargs["model_path"] = _resolve_nn_model_path(
+        resolved_path, resolved_scale = _resolve_nn_model(
             decoder_lower, model_version, model_path
         )
+        kwargs["model_path"] = resolved_path
+        # An explicit kwarg overrides the registry's per-version scale —
+        # the escape hatch for custom model_path weights.
+        if model_input_scale is not None:
+            resolved_scale = float(model_input_scale)
+        if resolved_scale != 1.0:
+            kwargs["model_input_scale"] = resolved_scale
         if onnx_provider is not None:
             onnx_provider_lower = onnx_provider.strip().lower()
             if onnx_provider_lower not in _NN_PROVIDERS:

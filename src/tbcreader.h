@@ -82,6 +82,11 @@ public:
         // jsaowji's comb_split_already(..., color_bp=True). Ignored by every
         // other decoder.
         bool modelChromaBandpass = true;
+
+        // Divisor applied to the nnTransform3D model's input magnitude
+        // spectrum. nnTransform3D v2 was trained on inputs scaled down by
+        // 128; v1 and every non-nnTransform3D decoder use 1.0.
+        double modelInputScale = 1.0;
     };
 
     // True if the given decoder uses neural-network inference and therefore

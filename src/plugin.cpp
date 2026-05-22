@@ -267,7 +267,9 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         if (!err && decoderName)
             Opts.decoder = decoderName;
 
-        // Get neural-network model path (optional; required for NN decoders)
+        // Get neural-network model path (optional; required for NN decoders).
+        // The Python wrapper resolves model_version to a bundled file path;
+        // lower-level callers supply the path directly.
         const char *modelPath = vsapi->mapGetData(In, "model_path", 0, &err);
         if (!err && modelPath)
             Opts.modelPath = modelPath;
@@ -284,6 +286,16 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         if (err)
             modelChromaBandpass = 1;
         Opts.modelChromaBandpass = (modelChromaBandpass != 0);
+
+        // Divisor applied to the nnTransform3D model's input magnitude
+        // spectrum. The wrapper sets this from the selected model version
+        // (v2 needs 128; v1 needs 1); lower-level callers supplying their
+        // own model_path set it to match their weights' training contract.
+        double modelInputScale = vsapi->mapGetFloat(
+            In, "model_input_scale", 0, &err);
+        if (err || modelInputScale <= 0.0)
+            modelInputScale = 1.0;
+        Opts.modelInputScale = modelInputScale;
 
         // Create the source
         D->V = std::make_unique<VSAnalog4fscSource>(
@@ -373,6 +385,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "model_path:data:opt;"
         "onnx_provider:data:opt;"
         "model_chroma_bandpass:int:opt;"
+        "model_input_scale:float:opt;"
         "reverse_fields:int:opt;"
         "chroma_gain:float:opt;"
         "chroma_phase:float:opt;"

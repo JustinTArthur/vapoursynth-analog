@@ -64,9 +64,10 @@ struct VSAnalog4fscOptions {
     std::vector<std::filesystem::path> dropoutExtraLumaSources;   // Extra TBC sources for multi-source DO correction
     std::vector<std::filesystem::path> dropoutExtraChromaSources; // Extra chroma TBC sources (for color-under formats)
     std::string decoder;           // Decoder name (empty = auto)
-    std::string modelPath;         // Filesystem path to ONNX model (for NN decoders)
+    std::string modelPath;         // Resolved ONNX model path (for NN decoders)
     std::string onnxProvider;      // ONNX EP name (empty = default per platform)
     bool modelChromaBandpass = true; // ldzeug2_luma_sep: I/Q LP FIR after demod
+    double modelInputScale = 1.0;  // nnTransform3D: input magnitude divisor
 };
 
 // Exception class for VSAnalog errors

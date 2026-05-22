@@ -257,6 +257,7 @@ bool TbcReader::configureDecoder() {
                     combConfig.nnTransform3D = true;
                     combConfig.nnModelPath = QString::fromStdString(config.modelPath);
                     combConfig.nnProvider = QString::fromStdString(config.onnxProvider);
+                    combConfig.nnInputMagnitudeScale = config.modelInputScale;
                     break;
                 default:
                     break;
