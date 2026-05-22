@@ -31,10 +31,12 @@ jobs:
 
       - name: Install ONNX Runtime
         run: |
-          ORT_VERSION=1.23.2
-          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+          # GPU build: its libonnxruntime carries the CUDA EP registration the
+          # CPU build lacks. Runs CPU-only fine without provider libraries.
+          ORT_VERSION=1.26.0
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu-${ORT_VERSION}.tgz" \
             | sudo tar -xz -C /opt
-          sudo ln -sfn "/opt/onnxruntime-linux-x64-${ORT_VERSION}" /opt/onnxruntime
+          sudo ln -sfn "/opt/onnxruntime-linux-x64-gpu-${ORT_VERSION}" /opt/onnxruntime
           sudo tee /opt/onnxruntime/lib/pkgconfig/libonnxruntime.pc > /dev/null << EOF
           prefix=/opt/onnxruntime
           libdir=\${prefix}/lib
@@ -118,10 +120,12 @@ jobs:
 
           dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config curl tar
 
-          ORT_VERSION=1.23.2
-          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+          # GPU build: its libonnxruntime carries the CUDA EP registration the
+          # CPU build lacks. Runs CPU-only fine without provider libraries.
+          ORT_VERSION=1.26.0
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu-${ORT_VERSION}.tgz" \
             | tar -xz -C /opt
-          ln -sfn "/opt/onnxruntime-linux-x64-${ORT_VERSION}" /opt/onnxruntime
+          ln -sfn "/opt/onnxruntime-linux-x64-gpu-${ORT_VERSION}" /opt/onnxruntime
           mkdir -p /opt/onnxruntime/lib/pkgconfig
           cat > /opt/onnxruntime/lib/pkgconfig/libonnxruntime.pc << ORTPC
           prefix=/opt/onnxruntime
@@ -202,7 +206,8 @@ jobs:
 
       - name: Install ONNX Runtime
         run: |
-          ORT_VERSION=1.23.2
+          # No GPU build is published for aarch64; CPU-only here.
+          ORT_VERSION=1.26.0
           curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz" \
             | sudo tar -xz -C /opt
           sudo ln -sfn "/opt/onnxruntime-linux-aarch64-${ORT_VERSION}" /opt/onnxruntime
@@ -278,7 +283,8 @@ jobs:
 
           dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config curl tar
 
-          ORT_VERSION=1.23.2
+          # No GPU build is published for aarch64; CPU-only here.
+          ORT_VERSION=1.26.0
           curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz" \
             | tar -xz -C /opt
           ln -sfn "/opt/onnxruntime-linux-aarch64-${ORT_VERSION}" /opt/onnxruntime
@@ -516,11 +522,13 @@ jobs:
         # on Linux already.
         shell: pwsh
         run: |
-          $ORT_VERSION = "1.23.2"
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-win-x64-$ORT_VERSION.zip"
+          # GPU build: its onnxruntime.dll carries the CUDA EP registration the
+          # CPU build lacks. Runs CPU-only fine without provider DLLs.
+          $ORT_VERSION = "1.26.0"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-win-x64-gpu-$ORT_VERSION.zip"
           Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
           Expand-Archive onnxruntime.zip -DestinationPath C:\
-          Move-Item "C:\onnxruntime-win-x64-$ORT_VERSION" C:\onnxruntime
+          Move-Item "C:\onnxruntime-win-x64-gpu-$ORT_VERSION" C:\onnxruntime
 
       - name: Download VapourSynth SDK
         shell: pwsh
