@@ -1,0 +1,4 @@
+# Exclude smoke-test sources from sdists. meson-python builds sdists via
+# meson dist / git archive, which honours export-ignore. Wheels can't pick
+# tests/ up since nothing in meson.build references it.
+tests/ export-ignore

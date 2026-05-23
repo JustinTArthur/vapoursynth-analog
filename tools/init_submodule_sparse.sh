@@ -24,14 +24,14 @@ git -c "submodule.${SUBMODULE}.shallow=true" \
     submodule update --init --depth 1 --filter=blob:none --recommend-shallow \
     "${SUBMODULE}"
 
-# Restrict the working tree to just the source code our build needs.
-# Cone mode is used because non-cone gitignore-style patterns matched
-# nothing on Windows Git Bash in CI, leaving the working tree empty.
-# Cone mode auto-includes top-level files (so LICENSE travels for free)
-# plus the listed directories; ci/, prototypes/, docs/, etc. stay excluded
-# because they aren't named.
+# Restrict the working tree to just the source code our build needs plus
+# the NTSC/PAL TBC fixtures the smoke tests use. Cone mode is used because
+# non-cone gitignore-style patterns matched nothing on Windows Git Bash in
+# CI, leaving the working tree empty. Cone mode auto-includes top-level
+# files (so LICENSE travels for free) plus the listed directories; ci/,
+# prototypes/, docs/, etc. stay excluded because they aren't named.
 git -C "${SUBMODULE}" sparse-checkout init --cone
-git -C "${SUBMODULE}" sparse-checkout set src
+git -C "${SUBMODULE}" sparse-checkout set src test-data
 
 echo "Submodule ${SUBMODULE} initialized:"
 echo "  HEAD: $(git -C "${SUBMODULE}" rev-parse HEAD)"
