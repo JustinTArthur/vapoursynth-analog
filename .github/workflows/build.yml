@@ -393,6 +393,22 @@ jobs:
           arch: clang_64
           cache: true
 
+      - name: Force 6.8.3 Qt env vars
+        # install-qt-action@v4 silently skips re-exporting QT_ROOT_DIR /
+        # PKG_CONFIG_PATH on a cache-hit second invocation in the same job,
+        # leaving the prior 6.2.4 values in place. Without this, meson and
+        # delocate would both pick up the 6.2.4 install instead of 6.8.3.
+        shell: bash
+        run: |
+          QT_PREFIX="${RUNNER_WORKSPACE}/Qt/6.8.3/macos"
+          {
+            echo "QT_ROOT_DIR=${QT_PREFIX}"
+            echo "QT_PLUGIN_PATH=${QT_PREFIX}/plugins"
+            echo "QML2_IMPORT_PATH=${QT_PREFIX}/qml"
+            echo "PKG_CONFIG_PATH=${QT_PREFIX}/lib/pkgconfig"
+          } >> "$GITHUB_ENV"
+          echo "${QT_PREFIX}/bin" >> "$GITHUB_PATH"
+
       - name: Build wheel
         run: |
           pip install delocate wheel
@@ -402,6 +418,18 @@ jobs:
           # and brew's onnxruntime path holds libonnxruntime.1.dylib (post-patch).
           DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib:$(brew --prefix onnxruntime)/lib" \
             delocate-wheel -w wheelhouse/ dist/*.whl
+
+      - name: Restore Qt framework structure (post-delocate)
+        # delocate-wheel flattens Qt's *.framework dirs to bare dylibs, which
+        # makes CFBundleGetBundleWithIdentifier fail at QCoreApplication init
+        # on Apple Silicon macOS 14+ (faults in CFBundleCopyBundleURL's PAC
+        # check). Re-create a minimal framework layout so CF resolves the
+        # bundle via identifier instead of falling back to the main bundle.
+        run: |
+          mkdir -p wheelhouse-final
+          python tools/restore_qt_frameworks.py wheelhouse/*.whl wheelhouse-final/
+          mv wheelhouse-final/*.whl wheelhouse/
+          rmdir wheelhouse-final
           python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
 
       - name: Upload wheel
@@ -460,6 +488,22 @@ jobs:
           arch: clang_64
           cache: true
 
+      - name: Force 6.8.3 Qt env vars
+        # install-qt-action@v4 silently skips re-exporting QT_ROOT_DIR /
+        # PKG_CONFIG_PATH on a cache-hit second invocation in the same job,
+        # leaving the prior 6.2.4 values in place. Without this, meson and
+        # delocate would both pick up the 6.2.4 install instead of 6.8.3.
+        shell: bash
+        run: |
+          QT_PREFIX="${RUNNER_WORKSPACE}/Qt/6.8.3/macos"
+          {
+            echo "QT_ROOT_DIR=${QT_PREFIX}"
+            echo "QT_PLUGIN_PATH=${QT_PREFIX}/plugins"
+            echo "QML2_IMPORT_PATH=${QT_PREFIX}/qml"
+            echo "PKG_CONFIG_PATH=${QT_PREFIX}/lib/pkgconfig"
+          } >> "$GITHUB_ENV"
+          echo "${QT_PREFIX}/bin" >> "$GITHUB_PATH"
+
       - name: Build wheel
         run: |
           pip install delocate wheel
@@ -469,6 +513,18 @@ jobs:
           # and brew's onnxruntime path holds libonnxruntime.1.dylib (post-patch).
           DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib:$(brew --prefix onnxruntime)/lib" \
             delocate-wheel -w wheelhouse/ dist/*.whl
+
+      - name: Restore Qt framework structure (post-delocate)
+        # delocate-wheel flattens Qt's *.framework dirs to bare dylibs, which
+        # makes CFBundleGetBundleWithIdentifier fail at QCoreApplication init
+        # on Apple Silicon macOS 14+ (faults in CFBundleCopyBundleURL's PAC
+        # check). Re-create a minimal framework layout so CF resolves the
+        # bundle via identifier instead of falling back to the main bundle.
+        run: |
+          mkdir -p wheelhouse-final
+          python tools/restore_qt_frameworks.py wheelhouse/*.whl wheelhouse-final/
+          mv wheelhouse-final/*.whl wheelhouse/
+          rmdir wheelhouse-final
           python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
 
       - name: Upload wheel
