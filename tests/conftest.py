@@ -4,12 +4,25 @@ Fixture TBCs come from the tbc-tools submodule's test-data tree, which
 ``tools/init_submodule_sparse.sh`` checks out for CI. Tests skip cleanly if
 those files are absent so the suite is still runnable on a stripped checkout.
 """
+import os
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TBC_DATA = _REPO_ROOT / "extern" / "tbc-tools" / "test-data"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Bypass interpreter shutdown to dodge the ONNX Runtime cleanup hang.
+
+    ORT's static destructors / background-thread join can stall indefinitely
+    at process exit (seen on Windows in CI: pytest finishes printing its
+    summary, then ``python.exe`` never returns). pytest's reports and
+    cache writeback have already run by the time this hook fires, so
+    ``_exit`` skips only the interpreter-shutdown stage.
+    """
+    os._exit(exitstatus)
 
 
 def _require(p: Path) -> str:
