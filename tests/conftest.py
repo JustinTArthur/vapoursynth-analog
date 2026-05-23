@@ -13,14 +13,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TBC_DATA = _REPO_ROOT / "extern" / "tbc-tools" / "test-data"
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Bypass interpreter shutdown to dodge the ONNX Runtime cleanup hang.
 
     ORT's static destructors / background-thread join can stall indefinitely
     at process exit (seen on Windows in CI: pytest finishes printing its
-    summary, then ``python.exe`` never returns). pytest's reports and
-    cache writeback have already run by the time this hook fires, so
-    ``_exit`` skips only the interpreter-shutdown stage.
+    summary, then ``python.exe`` never returns). ``trylast=True`` ensures
+    pytest's terminal-summary plugin (which also runs in sessionfinish)
+    prints failure tracebacks before we ``_exit`` and skip the no-op
+    interpreter-shutdown stage.
     """
     os._exit(exitstatus)
 

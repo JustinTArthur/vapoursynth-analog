@@ -73,8 +73,14 @@ def test_windows_init_has_no_delvewheel_patch():
     if platform.system() != "Windows":
         pytest.skip("Windows-only check")
     init = _site() / "vsanalog" / "__init__.py"
-    assert init.is_file()
-    assert "_delvewheel_patch" not in init.read_text(), (
-        "delvewheel search-path patch leaked back into vsanalog/__init__.py "
-        "— the colocate repack must restore the pristine wrapper module"
+    assert init.is_file(), f"missing: {init}"
+    text = init.read_text(encoding="utf-8")
+    hits = [
+        (i, ln) for i, ln in enumerate(text.splitlines(), 1)
+        if "_delvewheel_patch" in ln
+    ]
+    assert not hits, (
+        f"delvewheel search-path patch leaked back into {init} "
+        "(the colocate repack must restore the pristine wrapper module):\n"
+        + "\n".join(f"  line {i}: {ln}" for i, ln in hits[:5])
     )
