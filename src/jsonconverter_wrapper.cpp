@@ -16,6 +16,8 @@
 #include <QJsonArray>
 #include <QFile>
 
+#include <cmath>
+
 namespace {
 
 struct VideoParams {
@@ -30,6 +32,7 @@ struct VideoParams {
     int colourBurstEnd = 0;
     int white16bIre = 0;
     int black16bIre = 0;
+    int blanking16bIre = -1;  // -1 = absent; falls back to black16bIre
     bool isMapped = false;
     bool isSubcarrierLocked = false;
     bool isWidescreen = false;
@@ -66,8 +69,11 @@ void parseVideoParams(const QJsonObject &obj, VideoParams &params) {
     if (obj.contains("activeVideoEnd")) params.activeVideoEnd = obj["activeVideoEnd"].toInt();
     if (obj.contains("colourBurstStart")) params.colourBurstStart = obj["colourBurstStart"].toInt();
     if (obj.contains("colourBurstEnd")) params.colourBurstEnd = obj["colourBurstEnd"].toInt();
-    if (obj.contains("white16bIre")) params.white16bIre = obj["white16bIre"].toInt();
-    if (obj.contains("black16bIre")) params.black16bIre = obj["black16bIre"].toInt();
+    // Levels are rounded to ints: vhs-decode and tape-decode-rs emit
+    // fractional 16b IRE values.
+    if (obj.contains("white16bIre")) params.white16bIre = static_cast<int>(std::lround(obj["white16bIre"].toDouble()));
+    if (obj.contains("black16bIre")) params.black16bIre = static_cast<int>(std::lround(obj["black16bIre"].toDouble()));
+    if (obj.contains("blanking16bIre")) params.blanking16bIre = static_cast<int>(std::lround(obj["blanking16bIre"].toDouble()));
     if (obj.contains("isMapped")) params.isMapped = obj["isMapped"].toBool();
     if (obj.contains("isSubcarrierLocked")) params.isSubcarrierLocked = obj["isSubcarrierLocked"].toBool();
     if (obj.contains("isWidescreen")) params.isWidescreen = obj["isWidescreen"].toBool();
@@ -284,7 +290,9 @@ bool convertJsonToSqlite(const QString &jsonPath, const QString &sqlitePath) {
     sqlite3_bind_int(stmt, 14, videoParams.isWidescreen ? 1 : 0);
     sqlite3_bind_int(stmt, 15, videoParams.white16bIre);
     sqlite3_bind_int(stmt, 16, videoParams.black16bIre);
-    sqlite3_bind_int(stmt, 17, videoParams.black16bIre);  // blanking same as black
+    sqlite3_bind_int(stmt, 17, videoParams.blanking16bIre >= 0
+                                   ? videoParams.blanking16bIre
+                                   : videoParams.black16bIre);
     if (videoParams.tapeFormat.isEmpty()) {
         sqlite3_bind_null(stmt, 18);
     } else {

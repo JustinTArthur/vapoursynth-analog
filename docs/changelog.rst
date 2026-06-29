@@ -1,5 +1,10 @@
 Changelog
 =========
+0.2.3
+-----
+- Fix fractional IRE value input for blank/black/white in JSON to SQLite
+  conversion.
+- If chroma metadata sidecar is missing, fallback to luma/main metadata.
 
 0.2.2
 -----

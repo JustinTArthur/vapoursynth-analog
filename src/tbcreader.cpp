@@ -37,7 +37,8 @@ TbcReader::~TbcReader() {
 }
 
 bool TbcReader::openTbcSource(const QString &tbcPathStr,
-                              LdDecodeMetaData &meta, SourceVideo &video) {
+                              LdDecodeMetaData &meta, SourceVideo &video,
+                              const QString &fallbackMetadataDbPath) {
     // Find metadata file (.db or .json, converting JSON to SQLite if needed)
     QFileInfo tbcInfo(tbcPathStr);
     QString baseName = tbcInfo.absolutePath() + "/" + tbcInfo.completeBaseName();
@@ -58,11 +59,21 @@ bool TbcReader::openTbcSource(const QString &tbcPathStr,
                 lastError = "Failed to convert JSON metadata to SQLite: " + jsonPath;
                 return false;
             }
+        } else if (!fallbackMetadataDbPath.isEmpty() &&
+                   QFileInfo::exists(fallbackMetadataDbPath)) {
+            // No sidecar of its own: reuse the supplied (luma) metadata. For
+            // Y/C-separated VHS, vhs-decode emits one shared sidecar and the
+            // chroma TBC has the same field geometry as the luma TBC.
+            qInfo() << "No metadata sidecar for" << tbcPathStr
+                    << "- using fallback metadata:" << fallbackMetadataDbPath;
+            dbPath = fallbackMetadataDbPath;
         } else {
             lastError = "Could not find metadata file (.db or .json): " + baseName;
             return false;
         }
     }
+
+    metadataDbPath = dbPath;
 
     if (!Sqlite3MetadataReader::read(dbPath, meta)) {
         lastError = "Failed to read metadata from: " + dbPath;
@@ -84,12 +95,13 @@ bool TbcReader::openTbcSource(const QString &tbcPathStr,
     return true;
 }
 
-bool TbcReader::open(const std::filesystem::path &tbcPath, const Configuration &cfg) {
+bool TbcReader::open(const std::filesystem::path &tbcPath, const Configuration &cfg,
+                     const QString &fallbackMetadataDbPath) {
     close();
     config = cfg;
 
     QString tbcPathStr = QString::fromStdString(tbcPath.string());
-    if (!openTbcSource(tbcPathStr, *metadata, *sourceVideo)) {
+    if (!openTbcSource(tbcPathStr, *metadata, *sourceVideo, fallbackMetadataDbPath)) {
         return false;
     }
 

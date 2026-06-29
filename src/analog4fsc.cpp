@@ -60,7 +60,10 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
     // Open separate chroma source if provided (for color-under formats like VHS)
     if (chromaSourcePath) {
         chromaReader = std::make_unique<TbcReader>();
-        if (!chromaReader->open(*chromaSourcePath, config)) {
+        // vhs-decode emits a single shared sidecar for the luma TBC and none
+        // for the chroma TBC; fall back to the luma metadata when the chroma
+        // source has no sidecar of its own.
+        if (!chromaReader->open(*chromaSourcePath, config, reader->getMetadataDbPath())) {
             throw VSAnalogException("Failed to open chroma TBC file: " +
                                     chromaReader->getLastError().toStdString());
         }
@@ -83,6 +86,19 @@ VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
         if (reader->getNumFrames() != chromaReader->getNumFrames()) {
             throw VSAnalogException("Luma and chroma TBC files have different frame counts");
         }
+    }
+
+    // Guard against a zero IRE excursion (white == black), which would make the
+    // luma/chroma scale factors infinite. This usually means the metadata
+    // sidecar is missing its levels or failed to parse.
+    if (reader->getWhite16bIre() - reader->getBlack16bIre() == 0.0) {
+        throw VSAnalogException("Luma TBC metadata has a zero IRE range "
+                                "(white16bIre == black16bIre); check the metadata sidecar");
+    }
+    if (chromaReader &&
+        chromaReader->getWhite16bIre() - chromaReader->getBlack16bIre() == 0.0) {
+        throw VSAnalogException("Chroma TBC metadata has a zero IRE range "
+                                "(white16bIre == black16bIre); check the metadata sidecar");
     }
 
     initProperties();

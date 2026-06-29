@@ -64,9 +64,14 @@ public:
     TbcReader();
     ~TbcReader();
 
-    // Open a TBC file and its metadata
-    bool open(const std::filesystem::path &tbcPath, const Configuration &config);
+    // Open a TBC file and its metadata with optional fallback metadata
+    bool open(const std::filesystem::path &tbcPath, const Configuration &config,
+              const QString &fallbackMetadataDbPath = QString());
     void close();
+
+    // Path of the SQLite metadata DB actually used for this source
+    // (after any JSON→SQLite conversion). Empty until open() succeeds.
+    QString getMetadataDbPath() const { return metadataDbPath; }
 
     struct FrameRate {
         int64_t num;
@@ -137,6 +142,7 @@ private:
     LdDecodeMetaData::VideoParameters videoParameters;
     Configuration config;
     QString lastError;
+    QString metadataDbPath;  // SQLite metadata db actually used by this source
     bool isOpen = false;
 
     // Cached frame dimensions
@@ -153,9 +159,12 @@ private:
     bool loadFieldsForFrame(int frameNumber, QVector<SourceField> &fields,
                             qint32 &startIndex, qint32 &endIndex);
 
-    // Open a TBC's metadata (.db or .json→.db) and video file into the given objects
+    // Open a TBC's metadata (.db or .json→.db) and video file into the given
+    // objects. If the TBC has no sidecar of its own and fallbackMetadataDbPath
+    // names an existing DB, that DB is used.
     bool openTbcSource(const QString &tbcPathStr,
-                       LdDecodeMetaData &meta, SourceVideo &video);
+                       LdDecodeMetaData &meta, SourceVideo &video,
+                       const QString &fallbackMetadataDbPath = QString());
 
     // Configure the appropriate decoder based on video system and settings
     bool configureDecoder();
