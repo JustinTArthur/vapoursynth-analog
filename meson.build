@@ -209,7 +209,12 @@ if get_option('build_wheel')
     plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins'
     subdir('python/vsanalog')
 else
-    plugin_install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'
+    # Newer, Python-oriented VapourSynth drops libdir from its pkg-config file
+    # (plugins autoload from site-packages); fall back to the standard libdir.
+    plugin_install_dir = vapoursynth_dep.get_variable(
+        pkgconfig: 'libdir',
+        default_value: get_option('libdir'),
+    ) / 'vapoursynth'
 endif
 
 shared_library(
