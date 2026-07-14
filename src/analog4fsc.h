@@ -57,7 +57,9 @@ struct VSAnalog4fscOptions {
     double lumaNR = 0.0;           // Luma noise reduction (all decoders)
     int paddingMultiple = 8;       // Output padding multiple (0 = no padding)
     bool reverseFields = false;
-    bool phaseCompensation = false; // NTSC phase compensation
+    // Burst-locked chroma demodulation. Recovers the subcarrier phase from
+    // each line's burst rather than assuming it's locked to the 4𝑓𝑠𝑐 grid.
+    bool phaseCompensation = true;
     bool dropoutCorrect = false;   // Enable dropout correction
     bool dropoutOvercorrect = false; // Extend dropout boundaries (±24 samples)
     bool dropoutIntra = false;     // Intra-field only correction

@@ -16,7 +16,7 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         [, chroma_phase=0.0] \
         [, chroma_nr=0.0] \
         [, luma_nr=0.0] \
-        [, phase_compensation=0] \
+        [, phase_compensation=1] \
         [, padding_multiple=8] \
         [, dropout_correct=0] \
         [, dropout_overcorrect=0] \
@@ -74,7 +74,11 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         Luma noise-reduction level. Default ``0.0``.
 
     :param int phase_compensation:
-        Set to 1 to enable NTSC phase compensation. Default ``0``.
+        Burst-locked NTSC chroma demodulation, recovering the subcarrier phase
+        from each line's colorburst instead of assuming it's locked to the
+        4𝑓𝑠𝑐 sample grid. Set to 0 to force fixed-phase demodulation.
+        Default ``1``. The PAL decoders are burst-locked by design and ignore
+        this.
 
     :param int padding_multiple:
         Round output dimensions to a multiple of this value. Set to 0 to

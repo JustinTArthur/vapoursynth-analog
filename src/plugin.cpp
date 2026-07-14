@@ -231,7 +231,7 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         Opts.reverseFields = (reverseFields != 0);
         int phaseComp = vsapi->mapGetInt(In, "phase_compensation", 0, &err);
         if (err)
-            phaseComp = 0;
+            phaseComp = 1;
         Opts.phaseCompensation = (phaseComp != 0);
 
         // Dropout correction options

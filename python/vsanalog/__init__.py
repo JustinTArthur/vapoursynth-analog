@@ -67,7 +67,7 @@ def decode_4fsc_video(
     chroma_phase: float = 0.0,
     chroma_nr: float = 0.0,
     luma_nr: float = 0.0,
-    phase_compensation: bool = False,
+    phase_compensation: bool = True,
     padding_multiple: int = 8,
     dropout_correct: bool = False,
     dropout_overcorrect: bool = False,

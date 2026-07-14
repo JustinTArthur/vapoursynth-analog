@@ -18,7 +18,7 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         chroma_phase=0.0, \
         chroma_nr=0.0, \
         luma_nr=0.0, \
-        phase_compensation=False, \
+        phase_compensation=True, \
         padding_multiple=8, \
         dropout_correct=False, \
         dropout_overcorrect=False, \
@@ -76,7 +76,10 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         Luma noise-reduction level.
 
     :param bool phase_compensation:
-        Enable NTSC phase compensation.
+        Burst-locked NTSC chroma demodulation, recovering the subcarrier phase
+        from each line's colorburst instead of assuming it's locked to the
+        4𝑓𝑠𝑐 sample grid. Set to *False* to force fixed-phase demodulation.
+        The PAL decoders are burst-locked by design and ignore this.
 
     :param int padding_multiple:
         Round output dimensions to a multiple of this value. Set to ``0`` to

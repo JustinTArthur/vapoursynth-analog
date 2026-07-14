@@ -50,7 +50,7 @@ public:
         double lumaNR = 0.0;             // Luma noise reduction (all decoders)
         int paddingMultiple = 8;         // Output padding multiple (0 = no padding)
         bool reverseFields = false;
-        bool phaseCompensation = false;  // NTSC phase compensation
+        bool phaseCompensation = true;   // Burst-locked NTSC chroma demodulation
         bool dropoutCorrect = false;     // Enable dropout correction
         bool dropoutOvercorrect = false; // Extend dropout boundaries (±24 samples)
         bool dropoutIntra = false;       // Intra-field only correction

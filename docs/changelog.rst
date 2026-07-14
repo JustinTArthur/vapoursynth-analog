@@ -1,5 +1,10 @@
 Changelog
 =========
+Unreleased
+------------------------
+- ``phase_compensation`` now defaults to enabled, making burst-locked chroma
+  demodulation the default.
+
 0.2.3
 -----
 - Fix fractional IRE value input for blank/black/white in JSON to SQLite
