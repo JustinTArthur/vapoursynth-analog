@@ -13,13 +13,25 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         pr_source=None, \
         *, \
         decoder=None, \
+        color_family=None, \
+        chroma_filter=None, \
+        color_difference_precision=None, \
+        broadcast_scaling_precision=None, \
+        model_version=None, \
+        model_path=None, \
+        model_input_scale=None, \
+        onnx_provider=None, \
+        model_chroma_bandpass=None, \
         reverse_fields=False, \
         chroma_gain=1.0, \
         chroma_phase=0.0, \
         chroma_nr=0.0, \
         luma_nr=0.0, \
         phase_compensation=True, \
-        padding_multiple=8, \
+        first_active_sample=None, \
+        last_active_sample=None, \
+        first_active_line=None, \
+        last_active_line=None, \
         dropout_correct=False, \
         dropout_overcorrect=False, \
         dropout_intra=False, \
@@ -35,10 +47,14 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
     `ld-decode <https://github.com/happycube/ld-decode>`_ and
     `vhs-decode <https://github.com/oyvindln/vhs-decode>`_. These files
     normally have a ``.tbc`` extension indicating they are time-base-corrected
-    and must have a metadata sidecar file in JSON or SQLite format.
+    and must have a metadata sidecar file in JSON or SQLite format. The newer
+    CVBS format is also read, detected by extension: ``.composite`` for
+    composite, or ``.y``/``.c`` for separated luma/chroma (with a ``.meta``
+    sidecar). RAW (unscaled-ADC) CVBS encodings are not supported.
 
-    For color decodes, returns a clip in ``YUV444PS`` format (32-bit float).
-    For monochrome decodes, the clip is in ``GRAYS`` format.
+    Returns a 32-bit float clip whose format depends on *color_family*:
+    ``YUV444PS`` (default), ``RGBS``, or ``GRAYS``. SECAM decodes to
+    ``YUV440PS`` (4:4:0).
 
     :param composite_or_luma_source:
         Path to the composite or luma-only ``.tbc`` file.
@@ -54,11 +70,60 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
     :type pr_source: :py:class:`str` | :py:class:`~pathlib.Path` | None
 
     :param decoder:
-        Chroma decoder to use. One of ``"ntsc1d"``, ``"ntsc2d"``,
+        Chroma decoder to use. Analytical: ``"ntsc1d"``, ``"ntsc2d"``,
         ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"pal2d"``, ``"transform2d"``,
-        ``"transform3d"``, or ``"mono"``. When *None*, the decoder is chosen
-        automatically based on the video system in the TBC metadata.
+        ``"transform3d"``, ``"secam"``, or ``"mono"``. Neural-network
+        (NTSC only): ``"nntransform3d"``, ``"ldzeug2_color_cnn"``,
+        ``"ldzeug2_luma_sep"``, ``"ldzeug2_luma_sep_frame"``. When *None*, the
+        decoder is chosen automatically based on the video system.
     :type decoder: :py:class:`str` | None
+
+    :param color_family:
+        Output family: ``"yuv"`` (default; ``YUV444PS``, or ``YUV440PS`` for
+        SECAM), ``"rgb"`` (``RGBS``; not available for SECAM), or ``"gray"``
+        (``GRAYS`` luma only).
+    :type color_family: :py:class:`str` | None
+
+    :param chroma_filter:
+        Chroma bandpass/notch selection: ``"compat"``, ``"equiband_wide"``,
+        ``"equiband"``, ``"color_under"``, ``"wideband_i_ssb"``, or
+        ``"equiband_vsb"``. When *None*, the decoder default is used.
+    :type chroma_filter: :py:class:`str` | None
+
+    :param color_difference_precision:
+        Color-difference matrix precision: ``"classic"`` or ``"modern"``.
+    :type color_difference_precision: :py:class:`str` | None
+
+    :param broadcast_scaling_precision:
+        Broadcast-safe scaling precision: ``"classic"``, ``"modern"`` or
+        ``"scientific"``.
+    :type broadcast_scaling_precision: :py:class:`str` | None
+
+    :param model_version:
+        Bundled model to use for a neural-network *decoder* (defaults per
+        decoder). Ignored when *model_path* is given.
+    :type model_version: :py:class:`str` | None
+
+    :param model_path:
+        Path to custom model weights (``.onnx``, or a CoreML ``.mlpackage`` on
+        macOS) for a neural-network *decoder*.
+    :type model_path: :py:class:`str` | :py:class:`~pathlib.Path` | None
+
+    :param model_input_scale:
+        Override the model input magnitude divisor (``nntransform3d`` only).
+    :type model_input_scale: :py:class:`float` | None
+
+    :param onnx_provider:
+        Execution provider for a neural-network *decoder*: ``"auto"``,
+        ``"cpu"``, ``"cuda"``/``"gpu"``, ``"tensorrt"``/``"trt"``,
+        ``"migraphx"``, ``"directml"``, or ``"coreml"``. An unavailable
+        accelerator falls back to CPU.
+    :type onnx_provider: :py:class:`str` | None
+
+    :param model_chroma_bandpass:
+        Toggle the post-demodulation I/Q low-pass (``ldzeug2_luma_sep`` and
+        ``ldzeug2_luma_sep_frame`` only).
+    :type model_chroma_bandpass: :py:class:`bool` | None
 
     :param bool reverse_fields:
         Swap field order.
@@ -81,9 +146,19 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         4𝑓𝑠𝑐 sample grid. Set to *False* to force fixed-phase demodulation.
         The PAL decoders are burst-locked by design and ignore this.
 
-    :param int padding_multiple:
-        Round output dimensions to a multiple of this value. Set to ``0`` to
-        disable padding.
+    :param int first_active_sample:
+    :param int last_active_sample:
+        Inclusive horizontal crop, in the sample numbering of the 4𝑓𝑠𝑐 interface
+        standards (SMPTE ST 244, EBU Tech 3280-E): sample 0 is the first sample
+        of the digital active line, and negative numbers reach back into the
+        line blanking ahead of it. Defaults to the whole digital active line.
+        See :ref:`active-window`.
+
+    :param int first_active_line:
+    :param int last_active_line:
+        Inclusive vertical crop, in the standards' field-sequential signal line
+        numbers. ``first_active_line`` is the window's topmost line. Defaults to
+        the video system's standard active picture.
 
     :param bool dropout_correct:
         Enable dropout correction using metadata-identified dropouts.
@@ -185,6 +260,55 @@ uncommon. You will often want to convert it for downstream filters:
     workable_clip = clip.resize.Spline36(format=vs.YUV422P16)
 
 
+SECAM Chroma: ``resample_secam`` / ``fill_secam_by_delay``
+----------------------------------------------------------
+SECAM carries one color-difference component per line, so a SECAM decode comes
+out as ``YUV440PS`` (4:4:0) with each chroma plane holding only the lines its
+component was really decoded from. Because the second field of a 625-line frame
+sits an odd line count after the first, the components pair up in frame-row
+order — ``Db, Dr, Dr, Db, Db, ...`` — so neither plane is a fixed-step lattice,
+and which plane starts the frame flips frame to frame (the four-field ident
+cycle of Rec. ITU-R BR.469, reported per frame as
+``AnalogSecamFirstRowComponent``).
+
+The chroma planes are woven by row parity the way the luma plane is, so
+separating fields selects the same field on all three planes. A plane is still
+not a picture, though: on any frame one of the two carries each adjacent row
+pair spatially swapped, and which plane that is alternates.
+
+These two functions turn the lattice into a conventional raster. Both read the
+ident per frame, and both want woven frames — they split the fields themselves,
+so an already-separated clip is rejected rather than silently mishandled. Run
+them before deinterlacing, so the chroma is aligned before anything resamples
+it vertically.
+
+.. autofunction:: vsanalog.resample_secam
+
+.. autofunction:: vsanalog.fill_secam_by_delay
+
+.. code-block:: python
+
+    import vsanalog
+
+    clip = vsanalog.decode_4fsc_video("secam.tbc", "secam_chroma.tbc",
+                                      decoder="secam")
+
+    # Resample the lattice — truest to the decoded samples.
+    resampled = vsanalog.resample_secam(clip, format=vs.YUV444PS)
+
+    # Or reproduce what a receiver's delay line showed, copying each line's
+    # missing component from the previous line of the same field.
+    as_broadcast = vsanalog.fill_secam_by_delay(clip)
+
+    # Deinterlace afterwards, never before.
+    from vsdeinterlace import QTempGaussMC
+    progressive = QTempGaussMC(resampled.resize.Point(format=vs.YUV444P16)).deinterlace()
+
+
 Utility: ``requires_plugin``
 ----------------------------
 .. autofunction:: vsanalog.requires_plugin
+
+Utility: ``set_log_level``
+--------------------------
+.. autofunction:: vsanalog.set_log_level

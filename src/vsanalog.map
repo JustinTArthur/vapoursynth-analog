@@ -1,0 +1,11 @@
+/* ELF version script. libchromadec is linked in statically and its chd_*
+ * symbols carry default visibility, so without this the plugin exports the
+ * whole C ABI into the global namespace, where another plugin linking the same
+ * library could bind to our copy and share its process-wide state. Only
+ * VapourSynth's entry point belongs on the outside. */
+{
+    global:
+        VapourSynthPluginInit2;
+    local:
+        *;
+};

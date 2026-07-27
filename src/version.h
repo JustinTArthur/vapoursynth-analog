@@ -1,7 +1,0 @@
-#ifndef VERSION_H
-#define VERSION_H
-
-#define VS_ANALOG_PLUGIN_VERSION_MAJOR 0
-#define VS_ANALOG_PLUGIN_VERSION_MINOR 2
-
-#endif

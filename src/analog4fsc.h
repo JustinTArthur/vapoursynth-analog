@@ -8,138 +8,149 @@
 #ifndef ANALOG4FSC_H
 #define ANALOG4FSC_H
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <vector>
-#include <cstdint>
 
-class TbcReader;
-class ComponentFrame;
-struct DropoutCorrectionStats;
+#include "chromadecsource.h"
 
-// Video format description
-struct VSAnalogVideoFormat {
-    int ColorFamily;       // 1=Gray, 2=RGB, 3=YUV, 4=Bayer
-    int SampleType;        // 0=Integer, 1=Float
-    int BitsPerSample;
-    int SubSamplingW;      // log2 horizontal subsampling (0 for 4:4:4)
-    int SubSamplingH;      // log2 vertical subsampling (0 for 4:4:4)
-};
-
-// Rational number for time/fps
-struct VSAnalogRational {
-    int64_t Num;
-    int64_t Den;
-
-    double ToDouble() const { return static_cast<double>(Num) / static_cast<double>(Den); }
-};
-
-// Video properties
-struct VSAnalogVideoProperties {
-    VSAnalogVideoFormat VF;
-    int Width;
-    int Height;
-    int SSModWidth;    // Width rounded to subsampling multiple
-    int SSModHeight;   // Height rounded to subsampling multiple
-    int64_t NumFrames;
-    int64_t NumRFFFrames;  // Number of frames with RFF applied
-    VSAnalogRational FPS;
-    int64_t Duration;
-    VSAnalogRational TimeBase;
-};
-
-// Decode options
+// Decode options parsed from the plugin call.
 struct VSAnalog4fscOptions {
+    std::string decoder;           // Decoder name (empty = auto)
+
     double chromaGain = 1.0;
     double chromaPhase = 0.0;
     double chromaNR = 0.0;         // Chroma noise reduction (NTSC only)
-    double lumaNR = 0.0;           // Luma noise reduction (all decoders)
-    int paddingMultiple = 8;       // Output padding multiple (0 = no padding)
+    double lumaNR = 0.0;           // Luma noise reduction
     bool reverseFields = false;
-    // Burst-locked chroma demodulation. Recovers the subcarrier phase from
-    // each line's burst rather than assuming it's locked to the 4𝑓𝑠𝑐 grid.
+
+    // Active-region crop, inclusive, in the interface standards' own numbering:
+    // samples count from the start of the digital active line (ST 244 / EBU
+    // Tech 3280-E, negative for the line blanking ahead of it) and lines are
+    // the field-sequential signal line numbers (ST 170, BT.470, BT.1700, EBU
+    // Tech 3280). Unset selects the standard's own active window.
+    std::optional<int> firstActiveSample;
+    std::optional<int> lastActiveSample;
+    std::optional<int> firstActiveLine;
+    std::optional<int> lastActiveLine;
+    // Burst-locked chroma demodulation (NTSC).
     bool phaseCompensation = true;
-    bool dropoutCorrect = false;   // Enable dropout correction
-    bool dropoutOvercorrect = false; // Extend dropout boundaries (±24 samples)
-    bool dropoutIntra = false;     // Intra-field only correction
-    std::vector<std::filesystem::path> dropoutExtraLumaSources;   // Extra TBC sources for multi-source DO correction
-    std::vector<std::filesystem::path> dropoutExtraChromaSources; // Extra chroma TBC sources (for color-under formats)
-    std::string decoder;           // Decoder name (empty = auto)
+
+    // Output selection / color science knobs.
+    std::string colorFamily;       // "", "yuv", "rgb", "gray"
+    std::string chromaFilter;      // "" = decoder default
+    std::string colorDiffPrecision;        // "" = default ("modern")
+    std::string broadcastScalingPrecision; // "" = default ("scientific")
+
+    // Dropout correction.
+    bool dropoutCorrect = false;
+    bool dropoutOvercorrect = false;
+    bool dropoutIntra = false;
+    std::vector<std::filesystem::path> dropoutExtraLumaSources;
+    std::vector<std::filesystem::path> dropoutExtraChromaSources;
+
+    // Neural-network decoders.
+    std::string modelPath;         // Resolved model file (.onnx / .mlpackage)
+    std::string onnxProvider;      // Execution provider name (empty = default)
+    bool modelChromaBandpass = true;
+    double modelInputScale = 1.0;
 };
 
-// Exception class for VSAnalog errors
-class VSAnalogException : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
+// Rational number for time/fps.
+struct VSAnalogRational {
+    int64_t Num;
+    int64_t Den;
+    double ToDouble() const {
+        return static_cast<double>(Num) / static_cast<double>(Den);
+    }
 };
 
-// Main 4FSC source class
+// Main 4FSC source: owns a ChromaDecSource and translates it into a VapourSynth
+// clip (format, geometry, frame properties, float plane data).
 class VSAnalog4fscSource {
 public:
-    // Single source (composite) or dual source (luma + chroma from separate TBCs)
+    // VapourSynth output family for this clip.
+    enum class VSFormat { Gray, YUV444, YUV440, RGB };
+
     VSAnalog4fscSource(const std::filesystem::path &sourcePath,
                        const std::filesystem::path *chromaSourcePath,
                        const VSAnalog4fscOptions *opts);
     ~VSAnalog4fscSource();
 
-    // Prevent copying
     VSAnalog4fscSource(const VSAnalog4fscSource &) = delete;
     VSAnalog4fscSource &operator=(const VSAnalog4fscSource &) = delete;
 
-    // Get video properties
-    const VSAnalogVideoProperties &GetVideoProperties() const { return properties; }
+    // Geometry / timing.
+    VSFormat GetVSFormat() const { return vsFormat; }
+    int GetWidth() const { return width; }
+    int GetHeight() const { return height; }
+    int64_t GetNumFrames() const { return numFrames; }
+    VSAnalogRational GetFPS() const { return fps; }
+    VSAnalogRational GetTimeBase() const { return {fps.Den, fps.Num}; }
+    int64_t GetDuration() const { return numFrames; }
 
-    // Check if using mono (grayscale) output
-    bool IsMonoOutput() const;
-
-    // Get first active frame line (for field order calculation)
-    int GetFirstActiveFrameLine() const;
-
-    // Check if video system frame layout is NTSC (or PAL-M) vs PAL
-    bool IsNTSCLines() const;
-
-    // Check if source is widescreen (16:9)
-    bool IsWidescreen() const;
-
-    // Get sample aspect ratio (for _SARNum/_SARDen frame properties)
-    // Values match ld-chroma-decoder's outputwriter.cpp (EBU R92 / SMPTE RP 187)
+    // Frame-property inputs.
+    bool IsNTSCChromaticity() const { return isNtscChromaticity; }
+    bool IsSecam() const { return isSecam; }
+    bool UsesClassicColorDifference() const { return classicColorDifference; }
+    // The resolved crop, in the interface standards' numbering.
+    int GetFirstActiveLine() const { return firstActiveLine; }
+    int GetLastActiveLine() const { return lastActiveLine; }
+    int GetFirstActiveSample() const { return firstActiveSample; }
+    int GetLastActiveSample() const { return lastActiveSample; }
+    // Field 1 is the top field and sits on the even woven lines, so a crop that
+    // starts on an odd one puts field 2 on top.
+    bool IsBottomFieldFirst() const { return firstActiveFrameLine % 2 == 1; }
     struct SampleAspectRatio { int num; int den; };
     SampleAspectRatio GetSAR() const;
+    bool DropoutEnabled() const { return dropoutCorrect; }
 
-    // Get video parameters for YCbCr scaling
-    double GetBlack16bIre() const;
-    double GetWhite16bIre() const;
-    int GetActiveVideoStart() const;
+    // Per-frame extra outputs alongside the pixel data.
+    struct FrameExtra {
+        bool hasDropoutStats = false;
+        int64_t dropoutCorrected = 0;
+        int64_t dropoutFailed = 0;
+        int64_t dropoutTotalDistance = 0;
+        bool hasSecamComponent = false;
+        int secamFirstRowComponent = 0;  // 0 = Db, 1 = Dr
+    };
 
-    // Get active (unpadded) dimensions
-    int GetActiveWidth() const;
-    int GetActiveHeight() const;
-
-    // Set seek pre-roll (for accurate seeking)
-    void SetSeekPreRoll(int preroll);
-
-    // Get a frame - writes YUV float data to the provided buffers
-    // yData, uData, vData: pointers to output buffers (float)
-    // yStride, uStride, vStride: strides in bytes
-    // If stats is non-null, accumulates dropout correction statistics.
-    // Returns true on success
-    bool GetFrame(int frameNumber, float *yData, float *uData, float *vData,
-                  int yStride, int uStride, int vStride,
-                  DropoutCorrectionStats *stats = nullptr);
+    // Decode frame n into the provided VS plane buffers. planeData/planeStride
+    // hold one entry per plane (1 for Gray, 3 for YUV/RGB); strides are in bytes.
+    void GetFrame(int frameNumber, float *const *planeData,
+                  const int *planeStride, int numPlanes, FrameExtra &extra);
 
 private:
-    std::unique_ptr<TbcReader> reader;        // Primary (luma/composite) source
-    std::unique_ptr<TbcReader> chromaReader;  // Optional separate chroma source
-    VSAnalogVideoProperties properties;
-    int seekPreRoll = 0;
-    std::mutex decodeMutex;  // Protect decoding (single-threaded access to ld-decode)
+    void configure(const std::filesystem::path &sourcePath,
+                   const std::filesystem::path *chromaSourcePath,
+                   const VSAnalog4fscOptions *opts);
 
-    void initProperties();
-    void convertToFloat(const ComponentFrame &lumaFrame,
-                        const ComponentFrame *chromaFrame,
-                        float *yData, float *uData, float *vData,
-                        int yStride, int uStride, int vStride);
+    std::unique_ptr<ChromaDecSource> src;
+    // A single chd_decoder_t can't take concurrent decode calls (it parallelises
+    // each frame internally via its own pool); serialise access here.
+    std::mutex decodeMutex;
+
+    VSFormat vsFormat = VSFormat::YUV444;
+    int width = 0;
+    int height = 0;
+    int64_t numFrames = 0;
+    VSAnalogRational fps{30000, 1001};
+    bool isNtscChromaticity = true;
+    bool isSecam = false;
+    bool classicColorDifference = false;
+    bool isWidescreen = false;
+    // The resolved crop, kept in both numberings: the standards' for reporting
+    // and the source-row equivalents libchromadec is configured with.
+    int firstActiveSample = 0;
+    int lastActiveSample = 0;
+    int firstActiveLine = 0;
+    int lastActiveLine = 0;
+    int firstActiveFrameLine = 0;
+    bool dropoutCorrect = false;
 };
 
 #endif // ANALOG4FSC_H

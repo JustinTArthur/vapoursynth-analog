@@ -19,3 +19,6 @@ hook-dirs = "vsanalog.__pyinstaller:get_hook_dirs"
 
 [tool.meson-python.args]
 setup = ["-Dbuild_wheel=true"]
+# libchromadec is a static subproject absorbed into the plugin; don't install
+# its archive/headers/pkgconfig into the wheel (meson-python can't map them).
+install = ["--skip-subprojects"]

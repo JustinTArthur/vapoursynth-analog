@@ -12,6 +12,9 @@ build:
 
 sphinx:
    configuration: docs/conf.py
+   # autodoc failures are warnings, so without this a function silently
+   # disappears from the built page while the build still reports success.
+   fail_on_warning: true
 
 python:
    install:

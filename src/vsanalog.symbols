@@ -1,0 +1,4 @@
+# Mach-O exported symbol list. libchromadec is linked in statically and its
+# chd_* symbols carry default visibility, so without this the plugin re-exports
+# the whole C ABI. Only VapourSynth's entry point belongs on the outside.
+_VapourSynthPluginInit2

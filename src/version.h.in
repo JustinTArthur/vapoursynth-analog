@@ -1,0 +1,13 @@
+/* Generated from version.h.in by meson configure_file(). Edit VERSION.txt. */
+#ifndef VERSION_H
+#define VERSION_H
+
+#define VS_ANALOG_PLUGIN_VERSION_MAJOR @VERSION_MAJOR@
+#define VS_ANALOG_PLUGIN_VERSION_MINOR @VERSION_MINOR@
+#define VS_ANALOG_PLUGIN_VERSION_PATCH @VERSION_PATCH@
+
+/* The full version, including any PEP 440 prerelease suffix that the numeric
+ * components above drop. VapourSynth's plugin version is major/minor only. */
+#define VS_ANALOG_PLUGIN_VERSION_STRING "@VERSION_STRING@"
+
+#endif

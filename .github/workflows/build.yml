@@ -3,174 +3,102 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    # Trailing * permits PEP 440 prerelease/dev suffixes (a1, b2, rc1, .dev3).
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
   pull_request:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# ONNX Runtime version bundled on Linux/Windows. Must be a release chromadec
+# builds against AND that publishes prebuilt tarballs on the ORT GitHub
+# releases. Bump together with the chromadec pin. macOS ignores this (native
+# CoreML, no ORT).
+env:
+  ORT_VERSION: "1.22.0"
+  # The CUDA wheel links our own cuFFT kernels, so it needs a toolkit, not just
+  # ORT. Pinned to 12.x to match the CUDA the ORT GPU build loads: a 13.x
+  # toolkit would have our kernels on libcudart.so.13 while ORT wants .so.12.
+  CUDA_RPM_SUFFIX: "12-8"
+  CUDA_HOME_DIR: "/usr/local/cuda-12.8"
+  # MIGraphX comes from AMD, not Microsoft, and moves on ROCm's cadence rather
+  # than ORT_VERSION's. onnxruntime-migraphx (not onnxruntime-rocm — that one
+  # carries no MIGraphX EP) is published on ROCm's own manylinux index, built
+  # for the matching ROCm release.
+  ROCM_VERSION: "7.2.4"
+  ORT_MIGRAPHX_VERSION: "1.23.2"
+
 jobs:
-  build-linux-x86_64:
+  # ---------------------------------------------------------------------------
+  # VERSION.txt is the source of truth; this catches the copies that can't read
+  # it, and on a tag, a tag that disagrees with it.
+  # ---------------------------------------------------------------------------
+  version-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
+      - uses: actions/checkout@v6
+      - name: Check version copies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            meson ninja-build \
-            libfftw3-dev \
-            libsqlite3-dev \
-            libzimg-dev
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tools/check_version.sh "${GITHUB_REF_NAME}"
+          else
+            tools/check_version.sh
+          fi
 
-      - name: Install Qt6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.2.4'
-          arch: gcc_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
-
-      - name: Install VapourSynth headers
-        run: |
-          git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
-          sudo mkdir -p /usr/include/vapoursynth
-          sudo cp vapoursynth/include/VapourSynth4.h vapoursynth/include/VSHelper4.h /usr/include/vapoursynth/
-          sudo tee /usr/lib/pkgconfig/vapoursynth.pc > /dev/null << 'EOF'
-          prefix=/usr
-          includedir=${prefix}/include/vapoursynth
-          libdir=${prefix}/lib
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 74
-          Cflags: -I${includedir}
-          EOF
-          rm -rf vapoursynth
-
-      - name: Build
-        run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
-          meson compile -C build
-
-      - name: Package tarball
-        run: |
-          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
-          BASE="vsanalog-${VERSION}-linux-x86_64"
-          mkdir "${BASE}"
-          cp build/vsanalog.so "${BASE}/"
-          tar --owner=0 --group=0 -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
-
-      - name: Upload tarball
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-linux-x86_64
-          path: vsanalog-*.tar.xz
-
+  # ---------------------------------------------------------------------------
+  # Source distribution
+  # ---------------------------------------------------------------------------
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
       - name: Build sdist
         run: pipx run build --sdist -o dist/
-        env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
-
-      - name: Upload sdist
-        uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: vsanalog-sdist
           path: dist/*.tar.gz
 
-      - name: Build manylinux wheel
-        run: |
-          mkdir -p wheelhouse
-          docker run --rm \
-            -v "${{ github.workspace }}:/src:ro" \
-            -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
-            quay.io/pypa/manylinux_2_28_x86_64 \
-            bash -exc '
-          PYBIN="/opt/python/cp312-cp312/bin"
-          export PATH="${PYBIN}:${PATH}"
-
-          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
-
-          python3 -m pip install --quiet aqtinstall
-          # Qt renamed the Linux desktop arch from gcc_64 to linux_gcc_64
-          # after 6.2.x; 6.8.3 only exposes linux_gcc_64. aqt still drops
-          # the linux_ prefix from the install dir, so QT_PREFIX is unchanged.
-          python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
-            --base https://download.qt.io \
-            --outputdir /opt/qt --archives qtbase icu
-          QT_PREFIX="/opt/qt/6.8.3/gcc_64"
-          export PATH="${QT_PREFIX}/bin:${PATH}"
-          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
-          export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
-
-          mkdir -p /usr/include/vapoursynth
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h \
-            -o /usr/include/vapoursynth/VapourSynth4.h
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h \
-            -o /usr/include/vapoursynth/VSHelper4.h
-          cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
-          prefix=/usr
-          includedir=\${prefix}/include/vapoursynth
-          libdir=\${prefix}/lib64
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 74
-          Cflags: -I\${includedir}
-          VSPC
-
-          python3 -m pip install --quiet 'meson!=1.11.0' ninja meson-python build auditwheel wheel
-
-          cp -a /src /tmp/build
-          cd /tmp/build
-          python3 -m build --wheel --no-isolation -o /tmp/dist/
-          auditwheel repair --plat manylinux_2_28_x86_64 -w /wheelhouse/ /tmp/dist/*.whl
-          python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
-          '
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-wheel-linux-x86_64
-          path: wheelhouse/*.whl
-
-  build-linux-arm64:
-    runs-on: ubuntu-24.04-arm
+  # The docs autodoc the Python wrapper with vapoursynth mocked out, so this
+  # needs neither a build nor VapourSynth itself.
+  docs:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
         with:
-          submodules: recursive
+          python-version: '3.13'
+      - run: pip install -r requirements.docs.txt
+      - name: Build documentation
+        run: python -m sphinx -b html -W --keep-going docs docs/_build/html
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            meson ninja-build \
-            libfftw3-dev \
-            libsqlite3-dev \
-            libzimg-dev
-
-      - name: Install Qt6
-        uses: jurplel/install-qt-action@v4
+  # Build the sdist the way a PyPI user would: no models, no vendored
+  # subproject, no ONNX Runtime — just the wrap fetched over the network.
+  sdist-build-check:
+    needs: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
         with:
-          version: '6.7.3'
-          arch: linux_gcc_arm64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
+          name: vsanalog-sdist
+          path: dist/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfftw3-dev pkg-config
 
-      - name: Install VapourSynth headers
+      - name: Provide VapourSynth headers and pkg-config file
         run: |
-          git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
-          sudo mkdir -p /usr/include/vapoursynth
-          sudo cp vapoursynth/include/VapourSynth4.h vapoursynth/include/VSHelper4.h /usr/include/vapoursynth/
-          sudo tee /usr/lib/pkgconfig/vapoursynth.pc > /dev/null << 'EOF'
+          sudo mkdir -p /usr/include/vapoursynth /usr/lib/pkgconfig
+          for h in VapourSynth4.h VSHelper4.h; do
+            sudo curl -sSL "https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/$h" \
+              -o "/usr/include/vapoursynth/$h"
+          done
+          sudo tee /usr/lib/pkgconfig/vapoursynth.pc > /dev/null << 'VSPC'
           prefix=/usr
           includedir=${prefix}/include/vapoursynth
           libdir=${prefix}/lib
@@ -179,56 +107,144 @@ jobs:
           Description: VapourSynth
           Version: 74
           Cflags: -I${includedir}
-          EOF
-          rm -rf vapoursynth
+          VSPC
 
-      - name: Build
+      - name: Build and import from sdist
         run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
-          meson compile -C build
+          python -m venv .venv && . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install "vapoursynth>=76"
+          # -Dep=none: the NN decoders need an ONNX Runtime the sdist can't
+          # assume. Everything else must build from the wrap alone.
+          python -m pip install -v dist/*.tar.gz -Csetup-args="-Dep=none"
+          python -c "import vsanalog; vsanalog.requires_plugin(lambda: None)(); print('sdist build imports OK')"
 
-      - name: Package tarball
+  # ---------------------------------------------------------------------------
+  # macOS — native CoreML, no ONNX Runtime. Models bundled as .mlpackage.
+  # Published to PyPI.
+  # ---------------------------------------------------------------------------
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: brew install meson ninja fftw vapoursynth
+
+      - name: Fetch NN models
+        run: python3 tools/fetch_models.py
+
+      # Configure once so the chromadec wrap (with its convert_coreml.py) is
+      # fetched, then convert the ONNX models to CoreML .mlpackage bundles.
+      - name: Fetch chromadec sources (wrap)
         run: |
-          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
-          BASE="vsanalog-${VERSION}-linux-arm64"
+          PKG_CONFIG_PATH="$(brew --prefix vapoursynth)/lib/pkgconfig" \
+            meson setup build_probe -Dbuild_wheel=false || true
+
+      - name: Convert models to CoreML
+        run: |
+          python3.11 -m venv .venv-coreml || python3 -m venv .venv-coreml
+          .venv-coreml/bin/pip install --quiet coremltools onnx2torch torch onnx
+          .venv-coreml/bin/python tools/convert_models_macos.py \
+            --python .venv-coreml/bin/python \
+            --convert-script subprojects/chromadec/scripts/convert_coreml.py
+
+      - name: Build wheel
+        run: |
+          pip install delocate wheel build
+          # prefer_static takes Homebrew's libfftw3.a; libchromadec's bundled
+          # SQLite is already static, so only system libraries are left to link.
+          pipx run build --wheel -o dist/ -Csetup-args="-Dprefer_static=true"
+          delocate-wheel -w wheelhouse/ dist/*.whl
+          python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      # Built separately from the wheel on purpose: delocate rewrites the
+      # wheel's plugin to load vendored libraries from a sibling package
+      # directory, so that copy can't be dropped into a VapourSynth plugins
+      # directory on its own. This build links everything but the system
+      # libraries and CoreML statically.
+      - name: Build standalone plugin
+        run: |
+          meson setup build_tarball -Dbuild_wheel=false -Dprefer_static=true
+          meson compile -C build_tarball
+          otool -L build_tarball/vsanalog.dylib
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      - name: Package plugin tarball
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION.txt)
+          BASE="vsanalog-${VERSION}-macos-${{ matrix.arch }}"
           mkdir "${BASE}"
-          cp build/vsanalog.so "${BASE}/"
-          tar --owner=0 --group=0 -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
+          cp build_tarball/vsanalog.dylib "${BASE}/"
+          tar --uid 0 --gid 0 --exclude '.DS_Store' -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
 
-      - name: Upload tarball
-        uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
-          name: vsanalog-linux-arm64
+          name: vsanalog-wheel-macos-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+      - uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-macos-${{ matrix.arch }}
           path: vsanalog-*.tar.xz
 
-      - name: Build manylinux wheel
+  # ---------------------------------------------------------------------------
+  # Linux (manylinux) — CPU ONNX Runtime bundled by auditwheel. Published to PyPI.
+  # ---------------------------------------------------------------------------
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            manylinux: quay.io/pypa/manylinux_2_28_x86_64
+            ort: onnxruntime-linux-x64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            manylinux: quay.io/pypa/manylinux_2_34_aarch64
+            ort: onnxruntime-linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch NN models
+        run: python3 tools/fetch_models.py
+
+      - name: Build manylinux wheel and standalone plugin
         run: |
-          mkdir -p wheelhouse
+          mkdir -p wheelhouse plugin-out
           docker run --rm \
+            -e ORT_VERSION="${ORT_VERSION}" \
+            -e ORT_PKG="${{ matrix.ort }}" \
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
-            quay.io/pypa/manylinux_2_34_aarch64 \
+            -v "${{ github.workspace }}/plugin-out:/out" \
+            ${{ matrix.manylinux }} \
             bash -exc '
-          PYBIN="/opt/python/cp312-cp312/bin"
-          export PATH="${PYBIN}:${PATH}"
+          PYBIN="/opt/python/cp312-cp312/bin"; export PATH="${PYBIN}:${PATH}"
+          # fftw-static carries the libfftw3.a that fftw-devel does not ship;
+          # SQLite comes from libchromadec bundled overlay, so no sqlite-devel.
+          dnf install -y fftw-devel fftw-static gcc-c++ pkg-config git
 
-          dnf install -y fftw-devel sqlite-devel gcc-c++ pkg-config
-
-          python3 -m pip install --quiet aqtinstall
-          python3 -m aqt install-qt linux_arm64 desktop 6.7.3 linux_gcc_arm64 \
-            --base https://download.qt.io \
-            --outputdir /opt/qt --archives qtbase icu
-          QT_PREFIX="/opt/qt/6.7.3/gcc_arm64"
-          export PATH="${QT_PREFIX}/bin:${PATH}"
-          export PKG_CONFIG_PATH="${QT_PREFIX}/lib/pkgconfig"
-          export LD_LIBRARY_PATH="${QT_PREFIX}/lib"
+          # ONNX Runtime (CPU) prebuilt: headers + shared lib.
+          curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${ORT_PKG}-${ORT_VERSION}.tgz" -o /tmp/ort.tgz
+          mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
+          export LD_LIBRARY_PATH="/opt/ort/lib:${LD_LIBRARY_PATH}"
 
           mkdir -p /usr/include/vapoursynth
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h \
-            -o /usr/include/vapoursynth/VapourSynth4.h
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h \
-            -o /usr/include/vapoursynth/VSHelper4.h
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h -o /usr/include/vapoursynth/VapourSynth4.h
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h -o /usr/include/vapoursynth/VSHelper4.h
           cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
           prefix=/usr
           includedir=\${prefix}/include/vapoursynth
@@ -240,192 +256,228 @@ jobs:
           Cflags: -I\${includedir}
           VSPC
 
-          python3 -m pip install --quiet 'meson!=1.11.0' ninja meson-python build auditwheel wheel
+          python3 -m pip install --quiet "meson!=1.11.0" ninja meson-python build auditwheel wheel
 
-          cp -a /src /tmp/build
-          cd /tmp/build
-          python3 -m build --wheel --no-isolation -o /tmp/dist/
-          auditwheel repair --plat manylinux_2_34_aarch64 -w /wheelhouse/ /tmp/dist/*.whl
+          cp -a /src /tmp/build && cd /tmp/build
+          python3 -m build --wheel --no-isolation -o /tmp/dist/ \
+            -Csetup-args="-Dep=cpu" \
+            -Csetup-args="-Dprefer_static=true" \
+            -Csetup-args="-Dchromadec:onnxruntime_root=/opt/ort"
+          auditwheel repair -w /wheelhouse/ /tmp/dist/*.whl
           python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
+
+          # Standalone plugin: auditwheel rewrites the wheel copy to load
+          # vendored libraries from a sibling package directory, so the tarball
+          # gets its own build instead. -Dep=none drops the ONNX Runtime link
+          # (and with it the NN decoders) to keep the plugin a single file.
+          meson setup /tmp/btar -Dbuild_wheel=false -Dep=none -Dprefer_static=true
+          meson compile -C /tmp/btar
+          readelf -d /tmp/btar/vsanalog.so | grep NEEDED
+          cp /tmp/btar/vsanalog.so /out/
           '
 
-      - name: Upload wheel
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-wheel-linux-arm64
-          path: wheelhouse/*.whl
-
-  build-macos-arm64:
-    runs-on: macos-14
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
+      - name: Package plugin tarball
         run: |
-          brew install meson fftw sqlite vapoursynth
-
-      - name: Install Qt6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.2.4'
-          arch: clang_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
-
-      - name: Build
-        run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
-          meson compile -C build
-
-      - name: Package tarball
-        run: |
-          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
-          BASE="vsanalog-${VERSION}-macos-arm64"
+          VERSION=$(tr -d '[:space:]' < VERSION.txt)
+          BASE="vsanalog-${VERSION}-linux-${{ matrix.arch }}"
           mkdir "${BASE}"
-          cp build/vsanalog.dylib "${BASE}/"
-          tar --uid 0 --gid 0 --exclude '.DS_Store' -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
+          cp plugin-out/vsanalog.so "${BASE}/"
+          tar --owner=0 --group=0 -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
 
-      - name: Upload tarball
-        uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
-          name: vsanalog-macos-arm64
+          name: vsanalog-wheel-linux-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+      - uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-linux-${{ matrix.arch }}
           path: vsanalog-*.tar.xz
 
-      - name: Install Qt6 6.8.3 (for wheel bundling)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: clang_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
-
-      - name: Build wheel
-        run: |
-          pip install delocate wheel
-          pipx run build --wheel -o dist/
-          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
-            delocate-wheel -w wheelhouse/ dist/*.whl
-          python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
-        env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-wheel-macos-arm64
-          path: wheelhouse/*.whl
-
-  build-macos-x86_64:
-    runs-on: macos-15-intel
+  # ---------------------------------------------------------------------------
+  # Linux GPU variants — Release-only (too large for PyPI).
+  #   cuda     -> ORT GPU build (CUDA + TensorRT EPs) + native cuFFT pipeline
+  #   migraphx -> AMD's ORT-MIGraphX build + native hipFFT pipeline
+  # Both link the vendor toolkit for the device-resident pipeline, so both need
+  # a real toolkit in the container, not just ONNX Runtime. The vendor runtime
+  # is excluded from the wheel and must be present on the user's machine.
+  # NOTE: nothing here can exercise a GPU; the runners have none. This builds
+  # and load-checks the wheel — attaching the EP needs a GPU validation job.
+  # ---------------------------------------------------------------------------
+  build-linux-gpu:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ep: cuda
+          - ep: migraphx
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
+      - uses: actions/checkout@v6
+      - name: Fetch NN models
+        run: python3 tools/fetch_models.py
+      - name: Build manylinux GPU wheel (${{ matrix.ep }})
         run: |
-          brew install meson fftw sqlite vapoursynth
+          mkdir -p wheelhouse
+          docker run --rm \
+            -e ORT_VERSION="${ORT_VERSION}" -e EP="${{ matrix.ep }}" \
+            -e CUDA_RPM_SUFFIX="${CUDA_RPM_SUFFIX}" -e CUDA_HOME_DIR="${CUDA_HOME_DIR}" \
+            -e ROCM_VERSION="${ROCM_VERSION}" -e ORT_MIGRAPHX_VERSION="${ORT_MIGRAPHX_VERSION}" \
+            -v "${{ github.workspace }}:/src:ro" \
+            -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash -exc '
+          PYBIN="/opt/python/cp312-cp312/bin"; export PATH="${PYBIN}:${PATH}"
+          dnf install -y fftw-devel fftw-static gcc-c++ pkg-config git
 
-      - name: Install Qt6
-        uses: jurplel/install-qt-action@v4
+          mkdir -p /usr/include/vapoursynth
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h -o /usr/include/vapoursynth/VapourSynth4.h
+          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h -o /usr/include/vapoursynth/VSHelper4.h
+          cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
+          prefix=/usr
+          includedir=\${prefix}/include/vapoursynth
+          libdir=\${prefix}/lib64
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 74
+          Cflags: -I\${includedir}
+          VSPC
+
+          python3 -m pip install --quiet "meson!=1.11.0" ninja meson-python build auditwheel wheel
+
+          # ── Vendor toolkit + ONNX Runtime ────────────────────────────────
+          # EXCLUDE_ARGS is what auditwheel must NOT vendor: the vendor runtime
+          # the user installs themselves. Without it, a repaired wheel swells by
+          # hundreds of megabytes of CUDA/ROCm libraries.
+          if [ "${EP}" = "cuda" ]; then
+            cat > /etc/yum.repos.d/cuda.repo << REPO
+          [cuda]
+          name=CUDA
+          baseurl=https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64
+          enabled=1
+          gpgcheck=0
+          REPO
+            dnf install -y "cuda-nvcc-${CUDA_RPM_SUFFIX}" \
+                           "cuda-cudart-devel-${CUDA_RPM_SUFFIX}" \
+                           "libcufft-devel-${CUDA_RPM_SUFFIX}"
+            # Meson reads CUDA_PATH for the toolkit and needs nvcc on PATH for
+            # add_languages("cuda"); the RPMs put neither in the default place.
+            export CUDA_PATH="${CUDA_HOME_DIR}"
+            export PATH="${CUDA_HOME_DIR}/bin:${PATH}"
+            VENDOR_LIB_DIR="${CUDA_HOME_DIR}/lib64"
+            EXCLUDE_ARGS=(--exclude "libcudart.so*" --exclude "libcublas*.so*"
+                          --exclude "libcufft*.so*" --exclude "libcudnn*.so*"
+                          --exclude "libnvinfer*.so*" --exclude "libnvrtc*.so*")
+
+            curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu-${ORT_VERSION}.tgz" -o /tmp/ort.tgz
+            mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
+          else
+            cat > /etc/yum.repos.d/rocm.repo << REPO
+          [rocm]
+          name=ROCm
+          baseurl=https://repo.radeon.com/rocm/rhel8/${ROCM_VERSION}/main
+          enabled=1
+          gpgcheck=0
+          REPO
+            # migraphx-devel carries libmigraphx_c, which the ORT MIGraphX
+            # provider links; hipfft-devel and rocm-hip-runtime-devel cover
+            # hipcc + hipFFT + hip::host for the native pipeline.
+            dnf install -y rocm-hip-runtime-devel hipfft-devel migraphx-devel
+            export PATH="/opt/rocm/bin:${PATH}"
+            VENDOR_LIB_DIR="/opt/rocm/lib"
+            EXCLUDE_ARGS=(--exclude "libamdhip64.so*" --exclude "libhipfft.so*"
+                          --exclude "librocfft*.so*" --exclude "libmigraphx*.so*"
+                          --exclude "libMIOpen.so*" --exclude "libamd_comgr.so*"
+                          --exclude "libhsa-runtime64.so*" --exclude "librocblas.so*"
+                          --exclude "libhsakmt.so*")
+
+            # AMD ships ONNX Runtime as a Python wheel: shared objects under
+            # onnxruntime/capi/ and no headers at all. chromadec resolves
+            # -Donnxruntime_root as <root>/lib + <root>/include, so assemble
+            # one from Microsoft's same-version CPU tarball (headers) and AMD
+            # objects (libraries). The MIGraphX attach goes through the generic
+            # AppendExecutionProvider entry point, so no MIGraphX-specific
+            # header is involved and the stock headers suffice.
+            curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_MIGRAPHX_VERSION}/onnxruntime-linux-x64-${ORT_MIGRAPHX_VERSION}.tgz" -o /tmp/ort.tgz
+            mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
+            python3 -m pip install --quiet --no-deps --target /tmp/ortwheel \
+              "onnxruntime-migraphx==${ORT_MIGRAPHX_VERSION}" \
+              -f "https://repo.radeon.com/rocm/manylinux/rocm-rel-${ROCM_VERSION}/"
+            rm -f /opt/ort/lib/libonnxruntime*.so*
+            cp -a /tmp/ortwheel/onnxruntime/capi/libonnxruntime*.so* /opt/ort/lib/
+            ln -sf "libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" /opt/ort/lib/libonnxruntime.so
+          fi
+          export LD_LIBRARY_PATH="/opt/ort/lib:${VENDOR_LIB_DIR}:${LD_LIBRARY_PATH}"
+
+          cp -a /src /tmp/build && cd /tmp/build
+          python3 -m build --wheel --no-isolation -o /tmp/dist/ \
+            -Csetup-args="-Dep=${EP}" \
+            -Csetup-args="-Dprefer_static=true" \
+            -Csetup-args="-Dchromadec:onnxruntime_root=/opt/ort"
+
+          # No `|| auditwheel repair` fallback: a retry without --exclude
+          # succeeds by vendoring the entire vendor runtime, which is both the
+          # multi-gigabyte wheel we are avoiding and invisible in a green log.
+          auditwheel repair "${EXCLUDE_ARGS[@]}" -w /wheelhouse/ /tmp/dist/*.whl
+          # Retag so the variant does not collide with the PyPI wheel. A PEP 427
+          # build tag (digits first) keeps the filename installable by pip; a
+          # bare "-cuda" suffix does not parse as a wheel name at all.
+          python3 -m wheel tags --python-tag py3 --abi-tag none --build "0${EP}" /wheelhouse/*.whl --remove
+
+          # ORT dlopens its execution providers rather than linking them, so
+          # auditwheel never sees them and the repaired wheel would carry the
+          # runtime with no provider to attach.
+          for w in /wheelhouse/*.whl; do
+            python3 tools/inject_ort_providers.py "$w" /opt/ort/lib/libonnxruntime_providers_*.so
+          done
+
+          # Load check. The vendor runtime is excluded from the wheel, so the
+          # loader needs it on the path here exactly as a user would.
+          python3 -m pip install --quiet "vapoursynth>=76" pytest
+          python3 -m pip install --quiet /wheelhouse/*.whl
+          python3 tools/check_wheel_plugin.py
+          python3 -m pytest -v tests/test_autoload.py
+          '
+      - uses: actions/upload-artifact@v6
         with:
-          version: '6.2.4'
-          arch: clang_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
-
-      - name: Build
-        run: |
-          meson setup build --buildtype=release \
-            -Dpkg_config_path="${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
-          meson compile -C build
-
-      - name: Package tarball
-        run: |
-          VERSION=$(sed -n "s/.*version *: *'\([^']*\)'.*/\1/p" meson.build | head -1)
-          BASE="vsanalog-${VERSION}-macos-x86_64"
-          mkdir "${BASE}"
-          cp build/vsanalog.dylib "${BASE}/"
-          tar --uid 0 --gid 0 --exclude '.DS_Store' -cf - "${BASE}" | xz -9 -e -T1 > "${BASE}.tar.xz"
-
-      - name: Upload tarball
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-macos-x86_64
-          path: vsanalog-*.tar.xz
-
-      - name: Install Qt6 6.8.3 (for wheel bundling)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: clang_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
-
-      - name: Build wheel
-        run: |
-          pip install delocate wheel
-          pipx run build --wheel -o dist/
-          DYLD_LIBRARY_PATH="${{ env.QT_ROOT_DIR }}/lib" \
-            delocate-wheel -w wheelhouse/ dist/*.whl
-          python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
-        env:
-          PKG_CONFIG_PATH: ${{ env.QT_ROOT_DIR }}/lib/pkgconfig
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-wheel-macos-x86_64
+          name: vsanalog-wheel-linux-x86_64-${{ matrix.ep }}
           path: wheelhouse/*.whl
 
-  build-windows-x64:
-    # Pinned to windows-2022 (VS2022): newer images ship VS2026, whose MSVC STL
-    # removed stdext helpers that Qt 6.2.4 headers still reference.
+  # ---------------------------------------------------------------------------
+  # Windows x64 — CPU ONNX Runtime. Published to PyPI.
+  # ---------------------------------------------------------------------------
+  build-windows:
     runs-on: windows-2022
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@v6
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install Meson and Ninja
-        run: pip install 'meson!=1.11.0' ninja
-
-      - name: Install Qt6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.2.4'
-          arch: win64_msvc2019_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
-
+        run: pip install "meson!=1.11.0" ninja
       - name: Install pkg-config
         run: choco install pkgconfiglite --allow-empty-checksums
-
-      - name: Install vcpkg dependencies
+      # SQLite comes from libchromadec's bundled overlay. FFTW is needed both
+      # ways: the DLL build for the wheel (delvewheel vendors it) and the
+      # static-md build for the single-file standalone plugin.
+      - name: Install vcpkg deps
         run: |
           vcpkg integrate install
-          vcpkg install fftw3:x64-windows sqlite3:x64-windows
+          vcpkg install fftw3:x64-windows fftw3:x64-windows-static-md
+      - name: Fetch NN models
+        run: python tools/fetch_models.py
+
+      - name: Install ONNX Runtime (CPU)
+        shell: pwsh
+        run: |
+          $ort = "onnxruntime-win-x64-$env:ORT_VERSION"
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$ort.zip" -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort_extract
+          "ORT_ROOT=$PWD/ort_extract/$ort" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Download VapourSynth SDK
         shell: pwsh
@@ -436,14 +488,9 @@ jobs:
       - name: Create pkg-config files
         shell: pwsh
         run: |
-          $pkgConfigDir = "pkgconfig"
-          New-Item -ItemType Directory -Force -Path $pkgConfigDir
-
-          # Convert backslashes to forward slashes for pkg-config compatibility
+          $pkgConfigDir = "pkgconfig"; New-Item -ItemType Directory -Force -Path $pkgConfigDir | Out-Null
           $workspacePath = "${{ github.workspace }}".Replace('\', '/')
-
-          # VapourSynth
-          $vsContent = @"
+          @"
           prefix=$workspacePath/vs_sdk
           includedir=`${prefix}/sdk/include/vapoursynth
           libdir=`${prefix}
@@ -452,138 +499,384 @@ jobs:
           Description: VapourSynth
           Version: 70
           Cflags: -I`${includedir}
-          "@
-          $vsContent | Out-File -FilePath "$pkgConfigDir/vapoursynth.pc" -Encoding ASCII -NoNewline
-
-          # FFTW3
-          $fftwContent = @"
-          prefix=C:/vcpkg/installed/x64-windows
-          exec_prefix=`${prefix}
-          libdir=`${prefix}/lib
-          includedir=`${prefix}/include
-
-          Name: fftw3
-          Description: FFTW3
-          Version: 3.3.10
-          Libs: -L`${libdir} -lfftw3
-          Cflags: -I`${includedir}
-          "@
-          $fftwContent | Out-File -FilePath "$pkgConfigDir/fftw3.pc" -Encoding ASCII -NoNewline
-
-          # SQLite3
-          $sqliteContent = @"
-          prefix=C:/vcpkg/installed/x64-windows
-          exec_prefix=`${prefix}
-          libdir=`${prefix}/lib
-          includedir=`${prefix}/include
-
-          Name: sqlite3
-          Description: SQLite3
-          Version: 3.45.0
-          Libs: -L`${libdir} -lsqlite3
-          Cflags: -I`${includedir}
-          "@
-          $sqliteContent | Out-File -FilePath "$pkgConfigDir/sqlite3.pc" -Encoding ASCII -NoNewline
-
-      - name: Build
-        shell: pwsh
-        run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
-          $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
-
-          meson setup build --buildtype=release `
-            --pkg-config-path="$env:PKG_CONFIG_PATH" `
-            -Dcmake_prefix_path="${{ env.QT_ROOT_DIR }}"
-
-          meson compile -C build
-
-      - name: Package tarball
-        shell: pwsh
-        run: |
-          $VERSION = (Select-String -Path meson.build -Pattern "version\s*:\s*'([^']+)'" | Select-Object -First 1).Matches[0].Groups[1].Value
-          $BASE = "vsanalog-${VERSION}-windows-x64"
-          New-Item -ItemType Directory -Path $BASE | Out-Null
-          Copy-Item build\vsanalog.dll "$BASE\"
-          tar --uid 0 --gid 0 -cf "$BASE.tar" $BASE
-          python -c "import lzma,sys; i=sys.argv[1]; open(i+'.xz','wb').write(lzma.compress(open(i,'rb').read(),format=lzma.FORMAT_XZ,preset=9|lzma.PRESET_EXTREME))" "$BASE.tar"
-          Remove-Item "$BASE.tar"
-
-      - name: Upload tarball
-        uses: actions/upload-artifact@v6
-        with:
-          name: vsanalog-windows-x64
-          path: vsanalog-*.tar.xz
-
-      - name: Install Qt6 6.8.3 (for wheel bundling)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
-          # Download from official Qt server; aqt random picks can fail TLS
-          extra: '--base https://download.qt.io'
+          "@ | Out-File -FilePath "$pkgConfigDir/vapoursynth.pc" -Encoding ASCII -NoNewline
 
       - name: Build wheel
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;${{ env.QT_ROOT_DIR }}/lib/pkgconfig"
-          $env:PATH = "${{ env.QT_ROOT_DIR }}/bin;$env:PATH"
-          pip install delvewheel wheel
-          pipx run build --wheel -o dist/
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+          pip install delvewheel wheel build
+          python -m build --wheel -o dist/ `
+            -Csetup-args="-Dep=cpu" `
+            -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT"
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
-          # vsanalog.dll lives outside any Python package this wheel owns, so
-          # delvewheel needs --analyze-existing to inspect it; --namespace-pkg
-          # keeps it from minting __init__.py files inside vapoursynth/.
-          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" --add-path "${{ env.QT_ROOT_DIR }}/bin;C:/vcpkg/installed/x64-windows/bin" $wheel -w wheelhouse/
+          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" `
+            --add-path "C:/vcpkg/installed/x64-windows/bin;$env:ORT_ROOT/lib" $wheel -w wheelhouse/
           python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
-      - name: Upload wheel
-        uses: actions/upload-artifact@v6
+      # Separate from the wheel: delvewheel renames and relocates the DLLs the
+      # wheel's plugin loads, so that copy only works inside the package. This
+      # build takes static FFTW and no ONNX Runtime, leaving a lone DLL that
+      # needs nothing but VapourSynth and the MSVC runtime.
+      - name: Build standalone plugin
+        shell: pwsh
+        run: |
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;C:/vcpkg/installed/x64-windows-static-md/lib/pkgconfig"
+          meson setup build_tarball -Dbuild_wheel=false -Dep=none -Dprefer_static=true
+          meson compile -C build_tarball
+
+      - name: Package plugin tarball
+        shell: pwsh
+        run: |
+          $VERSION = (Get-Content VERSION.txt -Raw).Trim()
+          $BASE = "vsanalog-${VERSION}-windows-x64"
+          New-Item -ItemType Directory -Path $BASE | Out-Null
+          Copy-Item build_tarball/vsanalog.dll "$BASE/"
+          tar --uid 0 --gid 0 -cf "$BASE.tar" $BASE
+          python -c "import lzma,sys; i=sys.argv[1]; open(i+'.xz','wb').write(lzma.compress(open(i,'rb').read(),format=lzma.FORMAT_XZ,preset=9|lzma.PRESET_EXTREME))" "$BASE.tar"
+          Remove-Item "$BASE.tar"
+
+      - uses: actions/upload-artifact@v6
         with:
           name: vsanalog-wheel-windows-x64
           path: wheelhouse/*.whl
+      - uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-windows-x64
+          path: vsanalog-*.tar.xz
 
+  # ---------------------------------------------------------------------------
+  # Windows GPU variants — Release-only.
+  #   cuda     -> ORT GPU build (CUDA + TensorRT EPs) + native cuFFT pipeline
+  #   directml -> ORT DirectML build (AMD / Intel / any DX12 GPU)
+  # DirectML drives inference through ONNX Runtime only: there is no DirectML
+  # device-FFT pipeline in libchromadec, so that variant needs no toolkit.
+  # NOTE: nothing here can exercise a GPU; the runners have none. This builds
+  # and load-checks the wheel — attaching the EP needs a GPU validation job.
+  # ---------------------------------------------------------------------------
+  build-windows-gpu:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ep: cuda
+            ort_pkg: onnxruntime-win-x64-gpu
+          - ep: directml
+            ort_pkg: ""   # from Microsoft.ML.OnnxRuntime.DirectML nupkg
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install "meson!=1.11.0" ninja
+      - run: choco install pkgconfiglite --allow-empty-checksums
+      - name: Install vcpkg deps
+        run: |
+          vcpkg integrate install
+          vcpkg install fftw3:x64-windows
+
+      # -Dep=cuda maps to with_cuda=enabled, which compiles our own cuFFT
+      # kernels and so needs nvcc and the CUDA libraries, not just ORT. Pinned
+      # to the same 12.x major the ORT GPU build loads.
+      - name: Install CUDA toolkit
+        if: matrix.ep == 'cuda'
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: '12.8.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "cufft", "cufft_dev", "visual_studio_integration"]'
+
+      - name: Fetch NN models
+        run: python tools/fetch_models.py
+
+      # chromadec resolves -Donnxruntime_root as <root>/lib + <root>/include.
+      # The GPU zip already has that shape; the NuGet package does not — its
+      # headers are under build/native/include and the import library under
+      # runtimes/win-x64/native — so that one gets a root assembled for it.
+      # Left unassembled the library lookup just fails, has_ort goes false, and
+      # the wheel ships with no neural-network decoders at all and no error.
+      - name: Install ONNX Runtime (${{ matrix.ep }})
+        shell: pwsh
+        run: |
+          if ("${{ matrix.ep }}" -eq "cuda") {
+            $ort = "${{ matrix.ort_pkg }}-$env:ORT_VERSION"
+            Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$ort.zip" -OutFile ort.zip
+            Expand-Archive ort.zip -DestinationPath ort_extract
+            $root = "$PWD/ort_extract/$ort"
+            "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            # nuget resolves the dependency on Microsoft.AI.DirectML, which is
+            # where DirectML.dll itself lives; the ORT package carries none.
+            nuget install Microsoft.ML.OnnxRuntime.DirectML -Version $env:ORT_VERSION -OutputDirectory nuget
+            $pkg = Get-ChildItem nuget -Directory -Filter "Microsoft.ML.OnnxRuntime.DirectML*" | Select-Object -First 1
+            $dml = Get-ChildItem nuget -Directory -Filter "Microsoft.AI.DirectML*" | Select-Object -First 1
+            if (-not $dml) { throw "Microsoft.AI.DirectML was not restored; DirectML.dll would be missing from the wheel" }
+
+            $root = "$PWD/ort_root"
+            New-Item -ItemType Directory -Force -Path "$root/lib" | Out-Null
+            Copy-Item -Recurse "$($pkg.FullName)/build/native/include" "$root/include"
+            Copy-Item "$($pkg.FullName)/runtimes/win-x64/native/*" "$root/lib/"
+            Copy-Item "$($dml.FullName)/bin/x64-win/DirectML.dll" "$root/lib/"
+            "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+          "ORT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Download VapourSynth SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/vapoursynth/vapoursynth/releases/download/R70/VapourSynth64-Portable-R70.zip" -OutFile vs.zip
+          Expand-Archive vs.zip -DestinationPath vs_sdk
+      - name: Create pkg-config files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path pkgconfig | Out-Null
+          $workspacePath = "${{ github.workspace }}".Replace('\', '/')
+          @"
+          prefix=$workspacePath/vs_sdk
+          includedir=`${prefix}/sdk/include/vapoursynth
+          libdir=`${prefix}
+
+          Name: vapoursynth
+          Description: VapourSynth
+          Version: 70
+          Cflags: -I`${includedir}
+          "@ | Out-File -FilePath "pkgconfig/vapoursynth.pc" -Encoding ASCII -NoNewline
+      - name: Build wheel (${{ matrix.ep }})
+        shell: pwsh
+        run: |
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+          pip install delvewheel wheel build
+          python -m build --wheel -o dist/ `
+            -Csetup-args="-Dep=${{ matrix.ep }}" `
+            -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT"
+          $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
+
+          # ORT LoadLibrary's its execution providers by exact filename instead
+          # of linking them, so delvewheel neither finds them (--add-dll) nor
+          # may rename them (--no-mangle). DirectML.dll is a redistributable we
+          # ship; the CUDA runtime is the user's to install, so it is excluded
+          # rather than vendored.
+          $addDll = "onnxruntime_providers_shared.dll"
+          $noMangle = "onnxruntime_providers_shared.dll"
+          $exclude = ""
+          if ("${{ matrix.ep }}" -eq "cuda") {
+            $addDll = "$addDll;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
+            $noMangle = "$noMangle;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
+            # --exclude takes glob patterns, so these survive a CUDA minor bump.
+            $exclude = "cudart64_*.dll;cufft64_*.dll;cublas*64_*.dll;cudnn*.dll;nvinfer*.dll"
+          } else {
+            $addDll = "$addDll;DirectML.dll"
+            $noMangle = "$noMangle;DirectML.dll"
+          }
+          $repairArgs = @(
+            "--analyze-existing",
+            "--namespace-pkg", "vapoursynth;vapoursynth.plugins",
+            "--add-dll", $addDll,
+            "--no-mangle", $noMangle,
+            "--add-path", "C:/vcpkg/installed/x64-windows/bin;$env:ORT_EP_DLL_DIR"
+          )
+          if ($exclude) { $repairArgs += @("--exclude", $exclude) }
+          delvewheel repair @repairArgs $wheel -w wheelhouse/
+
+          # Build tag (digits first) rather than a "-directml" suffix, which
+          # would make the filename unparseable and uninstallable by pip.
+          python -m wheel tags --python-tag py3 --abi-tag none --build "0${{ matrix.ep }}" (Get-ChildItem wheelhouse/*.whl) --remove
+
+      # The vendor runtime is excluded from the CUDA wheel, so this also
+      # confirms it resolves from a normal toolkit install rather than the
+      # build tree. VapourSynth ignores plugins it cannot load, which is why
+      # check_wheel_plugin.py asserts instead of skipping the way the test does.
+      - name: Load check
+        shell: pwsh
+        run: |
+          pip install "vapoursynth>=76" pytest
+          pip install (Get-ChildItem wheelhouse/*.whl | Select-Object -First 1).FullName
+          python tools/check_wheel_plugin.py
+          python -m pytest -v tests/test_autoload.py
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: vsanalog-wheel-windows-x64-${{ matrix.ep }}
+          path: wheelhouse/*.whl
+
+  # ---------------------------------------------------------------------------
+  # Smoke tests — load the standalone plugin, then install the wheel and run
+  # the test suite against it. The capture-backed tests skip without sample
+  # media; the wrapper, autoload and wheel-layout tests always run.
+  # ---------------------------------------------------------------------------
+  smoke-test:
+    needs: [build-macos, build-linux, build-windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            wheel: vsanalog-wheel-linux-x86_64
+            tarball: vsanalog-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            wheel: vsanalog-wheel-linux-aarch64
+            tarball: vsanalog-linux-aarch64
+          - runner: macos-14
+            wheel: vsanalog-wheel-macos-arm64
+            tarball: vsanalog-macos-arm64
+          - runner: macos-15-intel
+            wheel: vsanalog-wheel-macos-x86_64
+            tarball: vsanalog-macos-x86_64
+          - runner: windows-2022
+            wheel: vsanalog-wheel-windows-x64
+            tarball: vsanalog-windows-x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v6
+        with:
+          name: ${{ matrix.wheel }}
+          path: wheelhouse/
+      - uses: actions/download-artifact@v6
+        with:
+          name: ${{ matrix.tarball }}
+          path: tarballs/
+
+      - name: Create test environment
+        run: |
+          python -m venv .venv
+          if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
+          python -m pip install --upgrade pip
+          # numpy backs a couple of the pixel-level assertions; without it
+          # those tests skip rather than fail.
+          python -m pip install "vapoursynth>=76" pytest numpy
+
+      # Before the wheel is installed: nothing else provides the namespace, so
+      # a load failure here is the standalone plugin missing a runtime library.
+      - name: Load the standalone plugin
+        run: |
+          if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
+          python -c "import glob, tarfile; tarfile.open(glob.glob('tarballs/*.tar.xz')[0]).extractall('tarball_x')"
+          python tools/check_standalone_plugin.py tarball_x
+
+      - name: Install wheel and run tests
+        run: |
+          if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
+          python -m pip install wheelhouse/*.whl
+          pytest -v tests/
+
+  # ---------------------------------------------------------------------------
+  # Release — attach tarballs + ALL wheels (lean + GPU variants) to the tag.
+  # ---------------------------------------------------------------------------
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux-x86_64, build-linux-arm64, build-macos-arm64, build-macos-x86_64, build-windows-x64]
+    # Deliberately not waiting on the GPU jobs: their execution providers are
+    # provisioned from third-party packages and a failure there must not hold
+    # back the release of the platform wheels and plugins.
+    needs: [version-check, sdist, sdist-build-check, smoke-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v6
+      # Explicit names: the GPU-variant artifacts may or may not exist yet, and
+      # they are published by release-gpu-wheels below, not from here.
+      - uses: actions/download-artifact@v6
         with:
+          pattern: >-
+            {vsanalog-sdist,vsanalog-wheel-macos-arm64,vsanalog-wheel-macos-x86_64,vsanalog-wheel-linux-x86_64,vsanalog-wheel-linux-aarch64,vsanalog-wheel-windows-x64,vsanalog-macos-arm64,vsanalog-macos-x86_64,vsanalog-linux-x86_64,vsanalog-linux-aarch64,vsanalog-windows-x64}
           path: artifacts
+          merge-multiple: true
 
-      - name: Create release
+      - name: Attach lean wheels + tarballs + sdist to the Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # The action's auto-detect only flags hyphen-suffixed (SemVer) tags
+          # as prereleases; PEP 440's hyphen-less form (v1.0.0a1, v1.0.0b1,
+          # v1.0.0rc1, v1.0.0.dev1) needs an explicit flag.
+          prerelease: ${{ contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') || contains(github.ref_name, '.dev') }}
           files: |
-            artifacts/**/*.tar.xz
-            artifacts/**/*.whl
-            artifacts/**/*.tar.gz
+            artifacts/*.tar.xz
+            artifacts/*.whl
+            artifacts/*.tar.gz
 
+  # ---------------------------------------------------------------------------
+  # GPU-variant wheels, added to the Release once they finish. Separate from the
+  # release job so a provisioning failure on one of them can't hold back — or
+  # race — the platform wheels and plugins.
+  # ---------------------------------------------------------------------------
+  release-gpu-wheels:
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    needs: [release, build-linux-gpu, build-windows-gpu]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Tolerates a variant that failed or was never built: whatever landed
+      # gets attached, and the step below stops if that turns out to be nothing.
+      - uses: actions/download-artifact@v6
+        continue-on-error: true
+        with:
+          pattern: vsanalog-wheel-*-{cuda,migraphx,directml}
+          path: gpu-wheels
+          merge-multiple: true
+
+      - name: List what was built
+        id: gpu
+        run: |
+          COUNT=$(find gpu-wheels -name '*.whl' 2>/dev/null | wc -l)
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          ls -lh gpu-wheels/ || true
+
+      # These can brush against the 2 GiB per-asset GitHub Release limit, so
+      # when GPU_WHEELS_S3_BUCKET is configured they go to S3 instead;
+      # otherwise they land on the Release (fine while they stay under 2 GiB).
+      - name: Upload GPU wheels to S3
+        if: steps.gpu.outputs.count != '0' && vars.GPU_WHEELS_S3_BUCKET != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+        run: |
+          DEST="s3://${{ vars.GPU_WHEELS_S3_BUCKET }}/${{ vars.GPU_WHEELS_S3_PREFIX }}${GITHUB_REF_NAME}/"
+          aws s3 cp gpu-wheels/ "$DEST" --recursive --acl public-read
+          echo "GPU wheels uploaded to $DEST"
+
+      - name: Attach GPU wheels to the Release
+        if: steps.gpu.outputs.count != '0' && vars.GPU_WHEELS_S3_BUCKET == ''
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gpu-wheels/*.whl
+
+  # ---------------------------------------------------------------------------
+  # PyPI — lean wheels only (macOS CoreML, Linux/Windows CPU). GPU variants are
+  # Release-only and never published here.
+  # ---------------------------------------------------------------------------
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux-x86_64, build-linux-arm64, build-macos-arm64, build-macos-x86_64, build-windows-x64]
+    needs: [version-check, sdist, sdist-build-check, smoke-test]
     runs-on: ubuntu-latest
     environment: release
     permissions:
       id-token: write
     steps:
-      - name: Download sdist
-        uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v6
         with:
           name: vsanalog-sdist
           path: dist/
-
-      - name: Download wheels
-        uses: actions/download-artifact@v6
+      # Explicit lean-wheel names only: GPU-variant artifacts (…-0cuda /
+      # …-0migraphx / …-0directml) exist on the same tag run but must NOT be
+      # published to PyPI.
+      - uses: actions/download-artifact@v6
         with:
-          pattern: vsanalog-wheel-*
+          pattern: >-
+            {vsanalog-wheel-macos-arm64,vsanalog-wheel-macos-x86_64,vsanalog-wheel-linux-x86_64,vsanalog-wheel-linux-aarch64,vsanalog-wheel-windows-x64}
           path: dist/
           merge-multiple: true
-
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

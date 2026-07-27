@@ -1,3 +1,0 @@
-// Stub QSqlDatabase header - content provided by sqliteio.h stub
-// This file exists only to satisfy #include <QSqlDatabase>
-#include "sqliteio.h"

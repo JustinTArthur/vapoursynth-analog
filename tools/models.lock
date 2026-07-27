@@ -1,0 +1,15 @@
+# vsanalog neural-network model manifest — consumed by tools/fetch_models.py.
+#
+# Columns (whitespace-separated):  <dest-relpath>  <sha256>  <url>
+#
+# <dest-relpath> is placed under python/vsanalog/models/ and must match the
+# _NN_DECODERS registry in python/vsanalog/__init__.py. Weights are downloaded
+# and checksum-verified in CI, never committed to the repo.
+#
+nntransform3d/chroma_net-v1-202603.onnx                6f7c1f9183f508e95d1f8b095d8bedc5137c917b6e60decbbdc2cbc99f4195f8  https://justinarthur.com/av/analog-decoding/models/nnTransform3D/chroma_net-v1-202603.onnx
+nntransform3d/chroma_net-v2-202605.onnx                40c15d91437a56354838394a3955f2e845b276ff1dacc765139381d8dcb89fbe  https://justinarthur.com/av/analog-decoding/models/nnTransform3D/chroma_net-v2-202605.onnx
+ldzeug/color_cnn_1031640.onnx                          ff882e883f8447933fda95f77a396007256f1d057cb5fc6812aeb03c0029d252  https://justinarthur.com/av/analog-decoding/models/ldzeug2/color_cnn_1031640.onnx
+ldzeug/color_cnn_denoise_613928_ft22k.onnx             2404f0e3932b09fad02cc14b8e6f5f2cd91c8d382fdea19874404845cee6781c  https://justinarthur.com/av/analog-decoding/models/ldzeug2/color_cnn_denoise_613928_ft22k.onnx
+ldzeug/color_cnn_v2_alot.onnx                          229d760a3d0c41cb3412b01b11ade03cc04777508ee984a0fadc897f276a3914  https://justinarthur.com/av/analog-decoding/models/ldzeug2/color_cnn_v2_alot.onnx
+ldzeug/luma_sep_2dgray_fields.onnx                     22f40dfe9b2bcc463bc8a991df9d44d4909aeb3da4f49bd2cfed0a9374bf5c03  https://justinarthur.com/av/analog-decoding/models/ldzeug2/luma_sep_2dgray_fields.onnx
+ldzeug/luma_sep_2d_frame_gray_gray_run2_latest.onnx    a33eef35638f46fe3c2aa71319d937ef8cfeac8560a2a29809b6f109a72e6ab4  https://justinarthur.com/av/analog-decoding/models/ldzeug2/luma_sep_2d_frame_gray_gray_run2_latest.onnx

@@ -5,6 +5,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath('..'))
 sys.path.insert(0, os.path.abspath('../python'))
@@ -14,6 +15,12 @@ sys.path.insert(0, os.path.abspath('../python'))
 project = 'vsanalog'
 copyright = '2025, Justin Turner Arthur'
 author = 'Justin Turner Arthur'
+
+# Same source of truth the build uses; the package needn't be installed here.
+release = (
+    Path(__file__).parent.parent.joinpath('VERSION.txt').read_text().strip()
+)
+version = '.'.join(release.split('.')[:2])
 
 # -- General configuration ---------------------------------------------------
 

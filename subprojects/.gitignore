@@ -1,0 +1,6 @@
+# Only the wrap files and packagefiles overlays are tracked; fetched subproject
+# sources and the wrap download cache are not.
+/*
+!/*.wrap
+!/.gitignore
+!/packagefiles/

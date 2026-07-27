@@ -1,9 +1,19 @@
 project('vapoursynth-analog', 'cpp',
-    version : '0.2.3',
+    # Single source of truth for the version, as libchromadec does it. Anything
+    # that can't ask Meson — the CI artifact names, the docs, the tag check —
+    # reads this file directly instead of parsing meson.build. src/version.h is
+    # generated from it below; tools/check_version.sh gates the rest.
+    version : files('VERSION.txt'),
     default_options : [
         'buildtype=release',
         'cpp_std=c++20',
-        'warning_level=2'
+        'warning_level=2',
+        # Take libchromadec's bundled SQLite (a trimmed, core-SQL-only
+        # amalgamation it folds into its own archive) over a system libsqlite3,
+        # so the plugin needs no SQLite installed: a system copy would be a
+        # load-time dependency whether or not a `.db` metadata sidecar is ever
+        # opened. Pass -Dforce_fallback_for= to link a system SQLite instead.
+        'force_fallback_for=sqlite3',
     ]
 )
 
@@ -14,177 +24,50 @@ project('vapoursynth-analog', 'cpp',
 # VapourSynth
 vapoursynth_dep = dependency('vapoursynth', version: '>=55')
 
-# Qt6 Core (required by ld-decode-tools)
-# Note: We use sqlite3 C API directly instead of Qt SQL to avoid symbol conflicts with PyQt
-qt6 = import('qt6')
-qt6_dep = dependency('qt6', modules: ['Core'], required: true, method: 'config-tool')
+# libchromadec — the Qt-free C-ABI chroma decoder, pulled in as a Meson git
+# wrap (see subprojects/chromadec.wrap) and linked statically. It vendors its
+# own SQLite (absorbed via link_whole) and optionally links ONNX Runtime for
+# the neural-network decoders. Everything the old ld-decode-tools + Qt6 +
+# FFTW3 + system-SQLite graph used to provide now lives behind chd_* here.
+is_darwin = host_machine.system() == 'darwin'
+ep = get_option('ep')
 
-# FFTW3 (required by ld-decode-tools chroma decoders)
-fftw3_dep = dependency('fftw3', required: true)
-
-# SQLite3 (for metadata database access without Qt SQL)
-sqlite3_dep = dependency('sqlite3', required: true)
-
-# =====================
-# ld-decode-tools library paths (relative)
-# =====================
-
-ld_tools_rel = 'extern' / 'ld-decode-tools'
-ld_library_rel = ld_tools_rel / 'src' / 'library'
-ld_chroma_rel = ld_tools_rel / 'src' / 'ld-chroma-decoder'
-
-# Absolute paths for file() calls
-ld_tools_dir = meson.current_source_dir() / ld_tools_rel
-ld_library_dir = meson.current_source_dir() / ld_library_rel
-ld_chroma_dir = meson.current_source_dir() / ld_chroma_rel
-
-# =====================
-# ld-decode TBC library (lddecode-library)
-# =====================
-
-# Note: sqliteio.cpp is excluded - we provide a stub header and use our own
-# sqlite3-based metadata reader to avoid Qt SQL dependency (PyQt symbol conflicts)
-lddecode_library_sources = files(
-    ld_library_rel / 'tbc' / 'dropouts.cpp',
-    ld_library_rel / 'tbc' / 'filters.cpp',
-    ld_library_rel / 'tbc' / 'lddecodemetadata.cpp',
-    ld_library_rel / 'tbc' / 'logging.cpp',
-    ld_library_rel / 'tbc' / 'navigation.cpp',
-    ld_library_rel / 'tbc' / 'sourceaudio.cpp',
-    ld_library_rel / 'tbc' / 'sourcevideo.cpp',
-    ld_library_rel / 'tbc' / 'vbidecoder.cpp',
-    ld_library_rel / 'tbc' / 'videoiddecoder.cpp',
-    ld_library_rel / 'tbc' / 'vitcdecoder.cpp',
-)
-
-# Stub directory for our sqliteio.h replacement (must come before ld-decode-tools includes)
-stubs_inc = include_directories('src/stubs')
-
-lddecode_library_inc = include_directories(
-    ld_library_rel / 'tbc',
-    ld_library_rel / 'filter',
-    ld_library_rel,
-)
-
-# Generate MOC files for Qt classes
-lddecode_library_moc = qt6.compile_moc(
-    headers: files(
-        ld_library_rel / 'tbc' / 'lddecodemetadata.h',
-    ),
-    include_directories: lddecode_library_inc,
-    dependencies: qt6_dep,
-    method: 'config-tool'
-)
-
-# Get git info for ld-decode-tools version macros
-git_prog = find_program('git', required: false)
-if git_prog.found()
-    git_branch = run_command(git_prog, '-C', ld_tools_dir, 'rev-parse', '--abbrev-ref', 'HEAD', check: false)
-    git_commit = run_command(git_prog, '-C', ld_tools_dir, 'log', '-1', '--format=%h', check: false)
-    app_branch = git_branch.returncode() == 0 ? git_branch.stdout().strip() : 'unknown'
-    app_commit = git_commit.returncode() == 0 ? git_commit.stdout().strip() : 'unknown'
+# Map the selected execution provider to libchromadec's build options.
+# with_cuda / with_rocm gate the native cuFFT / hipFFT pipelines; the DirectML
+# and TensorRT ONNX Runtime EPs come from whichever ORT build is linked, not a
+# Meson toggle. macOS always builds native CoreML with no ONNX Runtime.
+# Build libchromadec as a static archive so it's absorbed into our plugin (with
+# its vendored SQLite via link_whole), leaving no libchromadec.* to bundle. Its
+# transitive deps (FFTW/ONNX Runtime/CoreML frameworks) propagate to our link.
+chromadec_opts = [
+    'with_tests=false',
+    'with_examples=false',
+    'default_library=static',
+]
+if is_darwin
+    chromadec_opts += [
+        'with_onnxruntime=false',
+        'with_coreml=enabled',
+        'with_cuda=disabled',
+        'with_rocm=disabled',
+    ]
+elif ep == 'none'
+    chromadec_opts += [
+        'with_onnxruntime=false',
+        'with_coreml=disabled',
+        'with_cuda=disabled',
+        'with_rocm=disabled',
+    ]
 else
-    app_branch = 'unknown'
-    app_commit = 'unknown'
+    chromadec_opts += [
+        'with_onnxruntime=true',
+        'with_coreml=disabled',
+        'with_cuda=' + (ep == 'cuda' ? 'enabled' : 'disabled'),
+        'with_rocm=' + (ep == 'migraphx' ? 'enabled' : 'disabled'),
+    ]
 endif
 
-# Force-include our sqliteio stub before any source file includes the real one.
-# This works because our stub defines SQLITEIO_H guard, so the real header becomes empty.
-sqliteio_stub = meson.current_source_dir() / 'src' / 'stubs' / 'sqliteio.h'
-cpp = meson.get_compiler('cpp')
-if cpp.get_argument_syntax() == 'msvc'
-    force_include_args = ['/FI' + sqliteio_stub]
-else
-    force_include_args = ['-include', sqliteio_stub]
-endif
-
-lddecode_cpp_args = [
-    '-D_USE_MATH_DEFINES',
-    '-DAPP_BRANCH="' + app_branch + '"',
-    '-DAPP_COMMIT="' + app_commit + '"',
-] + force_include_args
-
-lddecode_library = static_library(
-    'lddecode-library',
-    lddecode_library_sources,
-    lddecode_library_moc,
-    include_directories: [stubs_inc, lddecode_library_inc],
-    dependencies: [qt6_dep],
-    cpp_args: lddecode_cpp_args,
-    gnu_symbol_visibility: 'hidden',
-)
-
-lddecode_library_dep = declare_dependency(
-    include_directories: lddecode_library_inc,
-    link_with: lddecode_library,
-    dependencies: [qt6_dep],
-)
-
-# =====================
-# JSON I/O from ld-decode-tools (for JSON to SQLite conversion)
-# =====================
-
-ld_jsonconv_rel = ld_tools_rel / 'src' / 'ld-json-converter'
-
-# Only include directory, source is inlined in our wrapper
-lddecode_jsonconv_inc = include_directories(
-    ld_jsonconv_rel,
-)
-
-# =====================
-# ld-decode chroma library (lddecode-chroma)
-# =====================
-
-lddecode_chroma_sources = files(
-    ld_chroma_rel / 'decoder.cpp',
-    ld_chroma_rel / 'decoderpool.cpp',
-    ld_chroma_rel / 'comb.cpp',
-    ld_chroma_rel / 'componentframe.cpp',
-    ld_chroma_rel / 'framecanvas.cpp',
-    ld_chroma_rel / 'outputwriter.cpp',
-    ld_chroma_rel / 'palcolour.cpp',
-    ld_chroma_rel / 'sourcefield.cpp',
-    ld_chroma_rel / 'transformpal.cpp',
-    ld_chroma_rel / 'transformpal2d.cpp',
-    ld_chroma_rel / 'transformpal3d.cpp',
-    ld_chroma_rel / 'monodecoder.cpp',
-    ld_chroma_rel / 'ntscdecoder.cpp',
-    ld_chroma_rel / 'paldecoder.cpp',
-)
-
-lddecode_chroma_inc = include_directories(
-    ld_chroma_rel,
-)
-
-# Generate MOC files for Qt classes in chroma decoder
-lddecode_chroma_moc = qt6.compile_moc(
-    headers: files(
-        ld_chroma_rel / 'decoder.h',
-        ld_chroma_rel / 'decoderpool.h',
-        ld_chroma_rel / 'monodecoder.h',
-        ld_chroma_rel / 'ntscdecoder.h',
-        ld_chroma_rel / 'paldecoder.h',
-    ),
-    include_directories: [lddecode_chroma_inc, lddecode_library_inc],
-    dependencies: [qt6_dep, lddecode_library_dep],
-    method: 'config-tool'
-)
-
-lddecode_chroma = static_library(
-    'lddecode-chroma',
-    lddecode_chroma_sources,
-    lddecode_chroma_moc,
-    include_directories: [lddecode_chroma_inc, lddecode_library_inc],
-    dependencies: [qt6_dep, fftw3_dep, lddecode_library_dep],
-    cpp_args: lddecode_cpp_args,
-    gnu_symbol_visibility: 'hidden',
-)
-
-lddecode_chroma_dep = declare_dependency(
-    include_directories: lddecode_chroma_inc,
-    link_with: lddecode_chroma,
-    dependencies: [qt6_dep, fftw3_dep, lddecode_library_dep],
-)
+chromadec_dep = dependency('chromadec', default_options: chromadec_opts)
 
 # =====================
 # vapoursynth-analog plugin
@@ -193,13 +76,57 @@ lddecode_chroma_dep = declare_dependency(
 vsanalog_sources = files(
     'src/plugin.cpp',
     'src/analog4fsc.cpp',
-    'src/tbcreader.cpp',
-    'src/dropoutcorrector.cpp',
-    'src/jsonconverter_wrapper.cpp',
-    'src/sqlite3_metadata_reader.cpp',
+    'src/chdlog.cpp',
+    'src/chromadecsource.cpp',
+)
+
+# The numeric components the plugin registration needs, taken off the front of
+# each dotted field so a PEP 440 prerelease still yields integers: 0.3.0a4 is
+# major 0, minor 3, patch 0. Meson has no regex, hence splitting on each marker.
+version_fields = meson.project_version().split('.')
+version_numbers = []
+foreach index : [0, 1, 2]
+    field = version_fields.length() > index ? version_fields[index] : '0'
+    foreach marker : ['a', 'b', 'rc', 'post', 'dev', '+', '-']
+        field = field.split(marker)[0]
+    endforeach
+    version_numbers += field == '' ? 0 : field.to_int()
+endforeach
+
+version_cfg = configuration_data()
+version_cfg.set('VERSION_MAJOR', version_numbers[0])
+version_cfg.set('VERSION_MINOR', version_numbers[1])
+version_cfg.set('VERSION_PATCH', version_numbers[2])
+version_cfg.set('VERSION_STRING', meson.project_version())
+vsanalog_sources += configure_file(
+    input: 'src/version.h.in',
+    output: 'version.h',
+    configuration: version_cfg,
 )
 
 vsanalog_inc = include_directories('src')
+
+# gnu_symbol_visibility only reaches our own sources; libchromadec is linked in
+# statically with its chd_* symbols at default visibility, so without a linker
+# script the plugin re-exports the whole C ABI. That matters beyond tidiness:
+# libchromadec's log sink, chd_init state and ONNX Runtime environment are all
+# process-wide, and on ELF a second plugin linking the same library could bind
+# to our copy and share them. Meson's only export-list keyword is
+# vs_module_defs, which the non-Windows linkers discard, so hand the flag over
+# directly.
+if is_darwin
+    vsanalog_symbol_file = files('src/vsanalog.symbols')
+    vsanalog_link_args = ['-Wl,-exported_symbols_list,'
+                          + meson.current_source_dir() / 'src/vsanalog.symbols']
+elif host_machine.system() == 'windows'
+    # VS_EXTERNAL_API's dllexport is already the whole export list.
+    vsanalog_symbol_file = []
+    vsanalog_link_args = []
+else
+    vsanalog_symbol_file = files('src/vsanalog.map')
+    vsanalog_link_args = ['-Wl,--version-script,'
+                          + meson.current_source_dir() / 'src/vsanalog.map']
+endif
 
 # When building as a wheel, install to vapoursynth/plugins/ in site-packages
 # so the plugin is auto-loaded by VapourSynth's site-packages plugin discovery.
@@ -220,20 +147,16 @@ endif
 shared_library(
     'vsanalog',
     vsanalog_sources,
-    # Note: lddecode_jsonconv_inc is intentionally NOT included here because it has
-    # a different version of lddecodemetadata.h that lacks blanking16bIre member
-    include_directories: [vsanalog_inc, lddecode_chroma_inc, lddecode_library_inc],
+    include_directories: [vsanalog_inc],
     dependencies: [
         vapoursynth_dep.partial_dependency(compile_args: true, includes: true),
-        qt6_dep,
-        fftw3_dep,
-        sqlite3_dep,
-        lddecode_library_dep,
-        lddecode_chroma_dep,
+        chromadec_dep,
     ],
     install: true,
     install_dir: plugin_install_dir,
     name_prefix: '',  # Don't add 'lib' prefix on Unix
     cpp_args: ['-D_USE_MATH_DEFINES'],
+    link_args: vsanalog_link_args,
+    link_depends: vsanalog_symbol_file,
     gnu_symbol_visibility: 'hidden',
 )

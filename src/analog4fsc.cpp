@@ -6,343 +6,436 @@
  ******************************************************************************/
 
 #include "analog4fsc.h"
-#include "tbcreader.h"
-#include "componentframe.h"
 
-#include <stdexcept>
+#include <cstring>
+#include <string>
+
+namespace {
+
+#if defined(__APPLE__)
+constexpr bool kIsDarwin = true;
+#else
+constexpr bool kIsDarwin = false;
+#endif
+
+// Map a decoder name (as used by the plugin/CLI) to a libchromadec kind.
+chd_decoder_kind_t parseDecoder(const std::string &name) {
+    if (name.empty() || name == "auto") return CHD_DEC_AUTO;
+    if (name == "mono") return CHD_DEC_MONO;
+    if (name == "ntsc1d") return CHD_DEC_NTSC_1D;
+    if (name == "ntsc2d") return CHD_DEC_NTSC_2D;
+    if (name == "ntsc3d") return CHD_DEC_NTSC_3D;
+    if (name == "ntsc3dnoadapt") return CHD_DEC_NTSC_3D_NO_ADAPT;
+    if (name == "pal2d") return CHD_DEC_PAL_2D;
+    if (name == "transform2d") return CHD_DEC_TRANSFORM_2D;
+    if (name == "transform3d") return CHD_DEC_TRANSFORM_3D;
+    if (name == "nntransform3d") return CHD_DEC_NN_TRANSFORM3D;
+    if (name == "ldzeug2_color_cnn") return CHD_DEC_LDZEUG_COLOR_CNN;
+    if (name == "ldzeug2_luma_sep") return CHD_DEC_LDZEUG_LUMA_SEP;
+    if (name == "ldzeug2_luma_sep_frame") return CHD_DEC_LDZEUG_LUMA_SEP_FRAME;
+    if (name == "secam") return CHD_DEC_SECAM;
+    throw VSAnalogException("Unknown decoder: " + name);
+}
+
+bool isNnDecoder(chd_decoder_kind_t kind) {
+    return kind == CHD_DEC_NN_TRANSFORM3D || kind == CHD_DEC_LDZEUG_COLOR_CNN ||
+           kind == CHD_DEC_LDZEUG_LUMA_SEP || kind == CHD_DEC_LDZEUG_LUMA_SEP_FRAME;
+}
+
+// Map an execution-provider name to a libchromadec NN backend. Values are
+// pre-validated in the Python wrapper; unknown names fall back to AUTO.
+chd_nn_backend_t providerToBackend(const std::string &p) {
+    if (p.empty() || p == "auto") return CHD_NN_BACKEND_AUTO;
+    if (p == "cpu") return CHD_NN_ORT_CPU;
+    if (p == "cuda" || p == "gpu") return CHD_NN_ORT_CUDA;
+    if (p == "tensorrt" || p == "trt") return CHD_NN_ORT_TENSORRT;
+    if (p == "migraphx") return CHD_NN_ORT_MIGRAPHX;
+    if (p == "directml") return CHD_NN_ORT_DIRECTML;
+    if (p == "coreml") return kIsDarwin ? CHD_NN_COREML : CHD_NN_ORT_COREML;
+    return CHD_NN_BACKEND_AUTO;
+}
+
+// The active window of an interface standard, inclusive, in that standard's own
+// numbering: samples from the start of the digital active line, lines as
+// field-sequential signal numbers. The sample window is the digital active
+// line, which overhangs the picture on both sides and so carries the blanking
+// transitions.
+struct ActiveWindow {
+    int firstSample;
+    int lastSample;
+    int firstLine;
+    int lastLine;
+};
+
+// 625-line: EBU Tech 3280-E's 948-sample digital active line, and BT.1700's
+// 576-line active picture — field 1 lines 23-310 and field 2 lines 336-623,
+// which weave into one contiguous block running from line 23 down to line 623.
+// SECAM shares it.
+//
+// 525-line: SMPTE ST 244's 768-sample digital active line, and ST 170's
+// 486-line active picture:  field 1 lines 21-263 and field 2 lines 283-525.
+// Field 2 starts at line 264, so its first active line sits half a line *above*
+// field 1's: the window's top line is field 2's 283 and its bottom is field 1's
+// 263, and 486-line output is therefore bottom field first. PAL-M shares the
+// window; its own digital active line is one sample further left, which the
+// per-source conversion takes care of.
+ActiveWindow standardActiveWindow(chd_video_standard_t standard) {
+    if (standard == CHD_STD_PAL || standard == CHD_STD_SECAM) {
+        return {0, 947, 23, 623};
+    }
+    return {0, 767, 283, 263};
+}
+
+}  // namespace
 
 VSAnalog4fscSource::VSAnalog4fscSource(const std::filesystem::path &sourcePath,
-                                        const std::filesystem::path *chromaSourcePath,
-                                        const VSAnalog4fscOptions *opts)
-    : reader(std::make_unique<TbcReader>())
-{
-    TbcReader::Configuration config;
-    if (opts) {
-        config.chromaGain = opts->chromaGain;
-        config.chromaPhase = opts->chromaPhase;
-        config.chromaNR = opts->chromaNR;
-        config.lumaNR = opts->lumaNR;
-        config.paddingMultiple = opts->paddingMultiple;
-        config.reverseFields = opts->reverseFields;
-        config.phaseCompensation = opts->phaseCompensation;
-        config.dropoutCorrect = opts->dropoutCorrect;
-        config.dropoutOvercorrect = opts->dropoutOvercorrect;
-        config.dropoutIntra = opts->dropoutIntra;
-        if (!opts->decoder.empty()) {
-            config.decoder = TbcReader::parseDecoderName(
-                QString::fromStdString(opts->decoder));
-        }
-    }
-
-    TbcReader::Configuration lumaConfig = config;
-    if (chromaSourcePath) {
-        // When a separate chroma 4fsc is supplied, assume the luma file is
-        // already Y/C-separated and avoid chroma-aware decoders that might
-        // reseparate based on potentially-absent chroma in the luma source.
-        lumaConfig.decoder = TbcReader::DecoderType::Mono;
-    }
-
-    if (!reader->open(sourcePath, lumaConfig)) {
-        throw VSAnalogException("Failed to open TBC file: " +
-                                reader->getLastError().toStdString());
-    }
-
-    // Add extra sources for multi-source dropout correction (luma/composite)
-    if (opts) {
-        for (const auto &extraPath : opts->dropoutExtraLumaSources) {
-            if (!reader->addExtraSource(extraPath)) {
-                throw VSAnalogException("Failed to add extra luma source: " +
-                                        reader->getLastError().toStdString());
-            }
-        }
-    }
-
-    // Open separate chroma source if provided (for color-under formats like VHS)
-    if (chromaSourcePath) {
-        chromaReader = std::make_unique<TbcReader>();
-        // vhs-decode emits a single shared sidecar for the luma TBC and none
-        // for the chroma TBC; fall back to the luma metadata when the chroma
-        // source has no sidecar of its own.
-        if (!chromaReader->open(*chromaSourcePath, config, reader->getMetadataDbPath())) {
-            throw VSAnalogException("Failed to open chroma TBC file: " +
-                                    chromaReader->getLastError().toStdString());
-        }
-
-        // Add extra chroma sources for multi-source dropout correction
-        if (opts) {
-            for (const auto &extraPath : opts->dropoutExtraChromaSources) {
-                if (!chromaReader->addExtraSource(extraPath)) {
-                    throw VSAnalogException("Failed to add extra chroma source: " +
-                                            chromaReader->getLastError().toStdString());
-                }
-            }
-        }
-
-        // Validate that both sources have compatible dimensions
-        if (reader->getWidth() != chromaReader->getWidth() ||
-            reader->getHeight() != chromaReader->getHeight()) {
-            throw VSAnalogException("Luma and chroma TBC files have mismatched dimensions");
-        }
-        if (reader->getNumFrames() != chromaReader->getNumFrames()) {
-            throw VSAnalogException("Luma and chroma TBC files have different frame counts");
-        }
-    }
-
-    // Guard against a zero IRE excursion (white == black), which would make the
-    // luma/chroma scale factors infinite. This usually means the metadata
-    // sidecar is missing its levels or failed to parse.
-    if (reader->getWhite16bIre() - reader->getBlack16bIre() == 0.0) {
-        throw VSAnalogException("Luma TBC metadata has a zero IRE range "
-                                "(white16bIre == black16bIre); check the metadata sidecar");
-    }
-    if (chromaReader &&
-        chromaReader->getWhite16bIre() - chromaReader->getBlack16bIre() == 0.0) {
-        throw VSAnalogException("Chroma TBC metadata has a zero IRE range "
-                                "(white16bIre == black16bIre); check the metadata sidecar");
-    }
-
-    initProperties();
+                                       const std::filesystem::path *chromaSourcePath,
+                                       const VSAnalog4fscOptions *opts)
+    : src(std::make_unique<ChromaDecSource>()) {
+    configure(sourcePath, chromaSourcePath, opts);
 }
 
 VSAnalog4fscSource::~VSAnalog4fscSource() = default;
 
-bool VSAnalog4fscSource::IsMonoOutput() const {
-    return reader->isMonoDecoder();
-}
+void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
+                                   const std::filesystem::path *chromaSourcePath,
+                                   const VSAnalog4fscOptions *opts) {
+    static const VSAnalog4fscOptions defaults;
+    if (!opts) opts = &defaults;
 
-int VSAnalog4fscSource::GetFirstActiveFrameLine() const {
-    return reader->getFirstActiveFrameLine();
-}
+    // Force SECAM over a 625-line sidecar that mis-declares PAL when the user
+    // explicitly asks for the SECAM decoder.
+    chd_video_params_t override = {};
+    const chd_video_params_t *overridePtr = nullptr;
+    if (opts->decoder == "secam") {
+        override.standard = CHD_STD_SECAM;
+        overridePtr = &override;
+    }
 
-bool VSAnalog4fscSource::IsNTSCLines() const {
-    const VideoSystem system = reader->getVideoSystem();
-    return (system == NTSC || system == PAL_M);
-}
+    // Open (libchromadec detects .tbc vs CVBS .composite/.y/.c by extension).
+    const bool dual = (chromaSourcePath != nullptr);
+    if (dual) {
+        src->openYC(sourcePath, *chromaSourcePath, overridePtr);
+    } else {
+        src->openComposite(sourcePath, overridePtr);
+    }
 
-bool VSAnalog4fscSource::IsWidescreen() const {
-    return reader->isWidescreen();
+    // Extra sources for multi-source dropout correction.
+    for (const auto &extra : opts->dropoutExtraLumaSources) {
+        src->addExtraComposite(extra);
+    }
+    for (const auto &extra : opts->dropoutExtraChromaSources) {
+        src->addExtraComposite(extra);
+    }
+
+    const chd_video_info_t &vinfo = src->info();
+    isSecam = (vinfo.standard == CHD_STD_SECAM);
+    isNtscChromaticity =
+        (vinfo.standard == CHD_STD_NTSC || vinfo.standard == CHD_STD_PAL_M);
+    isWidescreen = (vinfo.is_widescreen != 0);
+
+    // Pin the active window to the interface standard rather than inheriting
+    // whatever crop the source declares, so a given system always decodes to
+    // the same raster. Each bound can be overridden independently, in the
+    // standard's own numbering; libchromadec rotates and weaves them into the
+    // source's row coordinates, so the same numbers land on the same picture
+    // whatever alignment and field height the capture uses.
+    const ActiveWindow win = standardActiveWindow(vinfo.standard);
+    firstActiveSample = opts->firstActiveSample.value_or(win.firstSample);
+    lastActiveSample = opts->lastActiveSample.value_or(win.lastSample);
+    firstActiveLine = opts->firstActiveLine.value_or(win.firstLine);
+    lastActiveLine = opts->lastActiveLine.value_or(win.lastLine);
+
+    // A negative sample number counts back from the start of the digital active
+    // line, into the line blanking ahead of it, which is the far end of the same
+    // row: normalise it into the standard's own 0..field_width-1 numbering.
+    for (int *sample : {&firstActiveSample, &lastActiveSample}) {
+        if (*sample <= -vinfo.field_width || *sample >= vinfo.field_width) {
+            throw VSAnalogException(
+                "Active sample " + std::to_string(*sample) + " is more than one " +
+                std::to_string(vinfo.field_width) + "-sample row away from the start "
+                "of the digital active line");
+        }
+        if (*sample < 0) *sample += vinfo.field_width;
+    }
+
+    const int firstActiveRowSample = src->standardSampleToRowSample(firstActiveSample);
+    const int lastActiveRowSample = src->standardSampleToRowSample(lastActiveSample);
+    firstActiveFrameLine = src->signalLineToFrameLine(firstActiveLine);
+    const int lastActiveFrameLine = src->signalLineToFrameLine(lastActiveLine);
+
+    // Both bounds convert individually, so all that is left to check is that
+    // they come out the right way round in the source's raster. Horizontally
+    // that means the window doesn't run off the end of a row; vertically, that
+    // the first bound really is the topmost line.
+    if (firstActiveRowSample > lastActiveRowSample) {
+        throw VSAnalogException(
+            "Active sample range " + std::to_string(firstActiveSample) + ".." +
+            std::to_string(lastActiveSample) + " runs off the end of the source's rows: "
+            "in the source's own alignment they are samples " +
+            std::to_string(firstActiveRowSample) + " and " +
+            std::to_string(lastActiveRowSample) + " of a " +
+            std::to_string(vinfo.field_width) + "-sample row");
+    }
+    if (firstActiveFrameLine > lastActiveFrameLine) {
+        throw VSAnalogException(
+            "Active line " + std::to_string(firstActiveLine) + " sits below line " +
+            std::to_string(lastActiveLine) + " in the woven frame, so they are not a "
+            "top-to-bottom range. The first bound names the window's topmost line, "
+            "and the two fields' line numbers interleave rather than run down the "
+            "raster (this system's standard window is " + std::to_string(win.firstLine) +
+            ".." + std::to_string(win.lastLine) + ")");
+    }
+
+    // Resolve the output color family, and from it the libchromadec output
+    // format string plus the VapourSynth clip format.
+    std::string cf = opts->colorFamily;
+    if (cf.empty()) {
+        cf = (opts->decoder == "mono") ? "gray" : "yuv";
+    }
+    if (isSecam && cf == "rgb") {
+        throw VSAnalogException("RGB output is not supported for SECAM");
+    }
+
+    const char *outputFormat;
+    if (cf == "gray") {
+        outputFormat = "grays";
+        vsFormat = VSFormat::Gray;
+    } else if (cf == "rgb") {
+        outputFormat = "rgbs";
+        vsFormat = VSFormat::RGB;
+    } else {  // yuv
+        if (isSecam) {
+            outputFormat = "yuv440ps";
+            vsFormat = VSFormat::YUV440;
+        } else {
+            outputFormat = "yuv444ps";
+            vsFormat = VSFormat::YUV444;
+        }
+    }
+
+    // The 4:4:0 chroma planes weave both fields' half-rate lattices, which
+    // tiles only over whole two-line pairs of each field, so libchromadec takes
+    // the active line count in multiples of 4. The standard window is 576
+    // lines; only an explicit crop hits this.
+    if (vsFormat == VSFormat::YUV440 &&
+        (lastActiveFrameLine - firstActiveFrameLine + 1) % 4 != 0) {
+        throw VSAnalogException(
+            "SECAM 4:4:0 output needs an active line count divisible by 4, but "
+            "lines " + std::to_string(firstActiveLine) + ".." +
+            std::to_string(lastActiveLine) + " span " +
+            std::to_string(lastActiveFrameLine - firstActiveFrameLine + 1));
+    }
+
+    // Resolve the decoder kind.
+    chd_decoder_kind_t kind = parseDecoder(opts->decoder);
+    if (kind == CHD_DEC_AUTO && isSecam) {
+        kind = CHD_DEC_SECAM;
+    }
+    if (isNnDecoder(kind)) {
+        if (opts->modelPath.empty()) {
+            throw VSAnalogException(
+                "Neural-network decoder selected but no model path was supplied "
+                "(provide model_version or model_path)");
+        }
+        if (vinfo.standard != CHD_STD_NTSC) {
+            throw VSAnalogException("Neural-network decoders are NTSC-only");
+        }
+    }
+
+    src->createDecoder(kind);
+
+    // Decode knobs (tolerant setters silently skip options not meaningful for
+    // the chosen decoder, e.g. phase_compensation on a PAL decoder).
+    src->setOptF64(CHD_OPT_CHROMA_GAIN, opts->chromaGain);
+    src->setOptF64(CHD_OPT_CHROMA_PHASE_DEG, opts->chromaPhase);
+    src->setOptF64(CHD_OPT_CHROMA_NR_LEVEL, opts->chromaNR);
+    src->setOptF64(CHD_OPT_LUMA_NR_LEVEL, opts->lumaNR);
+    // libchromadec defaults to no padding, which is what we want: the output is
+    // exactly the active window, and callers add borders with std.AddBorders.
+    src->setOptI32Required(CHD_OPT_FIRST_ACTIVE_SAMPLE, firstActiveRowSample);
+    src->setOptI32Required(CHD_OPT_LAST_ACTIVE_SAMPLE, lastActiveRowSample);
+    src->setOptI32Required(CHD_OPT_FIRST_ACTIVE_FRAME_LINE, firstActiveFrameLine);
+    src->setOptI32Required(CHD_OPT_LAST_ACTIVE_FRAME_LINE, lastActiveFrameLine);
+    // Let the decoder's internal per-frame pool auto-size; VapourSynth pulls
+    // one frame at a time (fmUnordered) and each decode parallelises here.
+    src->setOptI32(CHD_OPT_THREAD_COUNT, 0);
+    src->setOptBool(CHD_OPT_REVERSE_FIELD_ORDER, opts->reverseFields);
+    src->setOptBool(CHD_OPT_PHASE_COMPENSATION, opts->phaseCompensation);
+    if (!opts->chromaFilter.empty()) {
+        src->setOptStr(CHD_OPT_CHROMA_FILTER, opts->chromaFilter.c_str());
+    }
+    if (!opts->colorDiffPrecision.empty()) {
+        src->setOptStr(CHD_OPT_COLOR_DIFFERENCE_PRECISION,
+                       opts->colorDiffPrecision.c_str());
+        // commit() rejects anything but these two spellings, so an exact match
+        // is the whole of the classic case.
+        classicColorDifference = (opts->colorDiffPrecision == "classic");
+    }
+    if (!opts->broadcastScalingPrecision.empty()) {
+        src->setOptStr(CHD_OPT_BROADCAST_SCALING_PRECISION,
+                       opts->broadcastScalingPrecision.c_str());
+    }
+    src->setOptStrRequired(CHD_OPT_OUTPUT_FORMAT, outputFormat);
+
+    if (isNnDecoder(kind)) {
+        src->setOptF64(CHD_OPT_NN_INPUT_MAGNITUDE_SCALE, opts->modelInputScale);
+        src->setOptBool(CHD_OPT_NN_CHROMA_BANDPASS, opts->modelChromaBandpass);
+    }
+
+    dropoutCorrect = opts->dropoutCorrect;
+    if (dropoutCorrect) {
+        src->setDropout(true, opts->dropoutOvercorrect, opts->dropoutIntra);
+    }
+
+    if (isNnDecoder(kind)) {
+        src->setNnModel(opts->modelPath, providerToBackend(opts->onnxProvider));
+    }
+
+    src->commit();
+
+    const chd_output_info_t &oinfo = src->outputInfo();
+    width = oinfo.width;
+    height = oinfo.height;
+    numFrames = oinfo.num_frames;
+
+    // Unpadded, the output is exactly the active window. Frame copies assume
+    // that, so fail loudly rather than overrun a plane if it ever stops holding.
+    const int activeWidth = lastActiveRowSample - firstActiveRowSample + 1;
+    const int activeHeight = lastActiveFrameLine - firstActiveFrameLine + 1;
+    if (width != activeWidth || height != activeHeight) {
+        throw VSAnalogException(
+            "Decoder returned " + std::to_string(width) + "x" + std::to_string(height) +
+            " for a " + std::to_string(activeWidth) + "x" + std::to_string(activeHeight) +
+            " active window");
+    }
+
+    // Constant frame rate from the video system.
+    if (isNtscChromaticity) {
+        fps = {30000, 1001};  // NTSC / PAL-M
+    } else {
+        fps = {25, 1};        // PAL / SECAM
+    }
 }
 
 VSAnalog4fscSource::SampleAspectRatio VSAnalog4fscSource::GetSAR() const {
-    // Follow's ld-chroma-decoder current Y4M output, which is based on EBU R92
-    // and SMPTE RP 187 (scaled from BT.601 (13.5 MHz) to 4𝑓𝑠𝑐).
-    // It's not clear how prolific RP 187 was in the industry, so consider
-    // the NTSC ratios subject to change
-    const bool widescreen = IsWidescreen();
-
-    if (IsNTSCLines()) {
-        // NTSC / PAL-M
-        if (widescreen) {
-            return {25, 22};    // (16/9) * (480 / (708 * 4*fSC / 13.5))
-        } else {
-            return {352, 413}; // (4/3) * (480 / (708 * 4*fSC / 13.5))
-        }
-    } else {
-        // PAL
-        if (widescreen) {
-            return {865, 779};  // (16/9) * (576 / (702 * 4*fSC / 13.5))
-        } else {
-            return {259, 311};  // (4/3) * (576 / (702 * 4*fSC / 13.5))
-        }
+    // Follows ld-chroma-decoder's Y4M output (EBU R92 / SMPTE RP 187, scaled
+    // from BT.601 13.5 MHz to 4𝑓𝑠𝑐). SECAM shares PAL's 625-line ratios.
+    if (isNtscChromaticity) {
+        return isWidescreen ? SampleAspectRatio{25, 22}
+                            : SampleAspectRatio{352, 413};
     }
+    return isWidescreen ? SampleAspectRatio{865, 779}
+                        : SampleAspectRatio{259, 311};
 }
 
-double VSAnalog4fscSource::GetBlack16bIre() const {
-    return reader->getBlack16bIre();
-}
-
-double VSAnalog4fscSource::GetWhite16bIre() const {
-    return reader->getWhite16bIre();
-}
-
-int VSAnalog4fscSource::GetActiveVideoStart() const {
-    return reader->getActiveVideoStart();
-}
-
-int VSAnalog4fscSource::GetActiveWidth() const {
-    return reader->getActiveWidth();
-}
-
-int VSAnalog4fscSource::GetActiveHeight() const {
-    return reader->getActiveHeight();
-}
-
-void VSAnalog4fscSource::initProperties() {
-    // Set up video format based on decoder type
-    // With separate chroma source, we always output YUV even if luma decoder is mono
-    if (reader->isMonoDecoder() && !chromaReader) {
-        // Mono decoder outputs grayscale (GRAYS format)
-        properties.VF.ColorFamily = 1;  // Gray
-    } else {
-        // Color decoders (or luma+chroma dual source) output YUV444PS
-        properties.VF.ColorFamily = 3;  // YUV
-    }
-    properties.VF.SampleType = 1;       // Float
-    properties.VF.BitsPerSample = 32;
-    properties.VF.SubSamplingW = 0;     // No subsampling
-    properties.VF.SubSamplingH = 0;
-
-    properties.Width = reader->getWidth();
-    properties.Height = reader->getHeight();
-    properties.SSModWidth = properties.Width;
-    properties.SSModHeight = properties.Height;
-    properties.NumFrames = reader->getNumFrames();
-    properties.NumRFFFrames = properties.NumFrames;  // No RFF support yet
-
-    // Set frame rate based on video system
-    auto fps = reader->getFrameRate();
-    properties.FPS.Num = fps.num;
-    properties.FPS.Den = fps.den;
-
-    // Duration in timebase units (1/fps)
-    properties.TimeBase.Num = properties.FPS.Den;
-    properties.TimeBase.Den = properties.FPS.Num;
-    properties.Duration = properties.NumFrames;
-}
-
-void VSAnalog4fscSource::SetSeekPreRoll(int preroll) {
-    seekPreRoll = preroll;
-}
-
-bool VSAnalog4fscSource::GetFrame(int frameNumber, float *yData, float *uData, float *vData,
-                                  int yStride, int uStride, int vStride,
-                                  DropoutCorrectionStats *stats) {
+void VSAnalog4fscSource::GetFrame(int frameNumber, float *const *planeData,
+                                  const int *planeStride, int numPlanes,
+                                  FrameExtra &extra) {
     std::lock_guard<std::mutex> lock(decodeMutex);
 
-    ComponentFrame lumaFrame;
-    if (!reader->decodeFrame(frameNumber, lumaFrame, stats)) {
-        return false;
-    }
+    chd_frame_t *f = src->decodeFrame(frameNumber);
 
-    // If we have a separate chroma source, decode from it too
-    if (chromaReader) {
-        ComponentFrame chromaFrame;
-        if (!chromaReader->decodeFrame(frameNumber, chromaFrame, stats)) {
-            return false;
-        }
-        convertToFloat(lumaFrame, &chromaFrame, yData, uData, vData, yStride, uStride, vStride);
-    } else {
-        convertToFloat(lumaFrame, nullptr, yData, uData, vData, yStride, uStride, vStride);
-    }
-    return true;
-}
-
-void VSAnalog4fscSource::convertToFloat(const ComponentFrame &lumaFrame,
-                                        const ComponentFrame *chromaFrame,
-                                        float *yData, float *uData, float *vData,
-                                        int yStride, int uStride, int vStride) {
-    const int width = properties.Width;
-    const int height = properties.Height;
-    const int activeWidth = reader->getActiveWidth();
-    const int activeHeight = reader->getActiveHeight();
-    const bool isMono = (uData == nullptr);
-
-    // Active region offsets (ComponentFrame contains full field data)
-    const int firstActiveLine = reader->getFirstActiveFrameLine();
-    const int activeVideoStart = reader->getActiveVideoStart();
-
-    // For chroma from separate source, use its offsets (should match but be safe)
-    const int chromaFirstActiveLine = chromaReader ? chromaReader->getFirstActiveFrameLine() : firstActiveLine;
-    const int chromaActiveVideoStart = chromaReader ? chromaReader->getActiveVideoStart() : activeVideoStart;
-
-    // Floating point representations of sample values use [0.0, 1.0] for luma,
-    // luminance, or brightness in standard dynamic range. They use [-0.5, 0.5]
-    // to represent luma difference from red or blue brightness.
-    static constexpr double Y_SCALE = 1.0;  // 1.0 - 0.0
-    static constexpr double C_SCALE = 1.0;  // 0.5 - -0.5
-
-    // The excursion of the color difference signals without broadcast-safe
-    // scaling applied. For example, the blue difference signal can have values
-    // from -0.886 to 0.886
-    // 0.886-(-0.886) == 1.772
-    // These are based on the NTSC-1953 luminance matrix, but at the modern
-    // precision used to derive luma and color-differences from R′G′B′ as used
-    // in ITU-R BT.470, BT.601, and SMPTE ST 170.
-    static constexpr double BLUE_DIFFERENCE_SCALE = 1.772;  // 2 * (1 - 0.114)
-    static constexpr double RED_DIFFERENCE_SCALE = 1.402;   // 2 * (1 - 0.299)
-
-    // Reduction factors to derive broadcast-safe values U and V
-    // from the color difference values (B′ - Y′) and (R′ - Y′)
-    // kB = sqrt(209556997.0 / 96146491.0) / 3.0
-    // kR = sqrt(221990474.0 / 288439473.0)
-    // [Poynton eq 28.1 p336]
-    static constexpr double kB = 0.49211104112248356308804691718185;
-    static constexpr double kR = 0.87728321993817866838972487283129;
-
-    // Derive scaling factors from video parameters. Chroma is normalized
-    // against the chroma source's own IRE excursion: when a separate chroma
-    // TBC is supplied (color-under formats), its metadata may declare a
-    // different black/white range than the luma TBC.
-    const double yOffset = reader->getBlack16bIre();
-    const double yRange = reader->getWhite16bIre() - yOffset;
-    const double uvRange = chromaReader
-        ? (chromaReader->getWhite16bIre() - chromaReader->getBlack16bIre())
-        : yRange;
-
-    // Calculate scale factors to go from our 4𝑓𝑠𝑐 decoder YUV values to what
-    // ITU-T BT.601 calls "re-normalized colour-difference signals".
-    // Factor includes intermediate conversion of the broadcast-safe U and V to
-    // the original color difference values B′ - Y′ and R′ - Y′
-    const double yScale = Y_SCALE / yRange;
-    const double cbScale = (C_SCALE / (BLUE_DIFFERENCE_SCALE * kB)) / uvRange;
-    const double crScale = (C_SCALE / (RED_DIFFERENCE_SCALE * kR)) / uvRange;
-
-    // Determine which frame to use for chroma (separate chroma source or same as luma)
-    const ComponentFrame &uvSourceFrame = chromaFrame ? *chromaFrame : lumaFrame;
-    const int uvFirstActiveLine = chromaFrame ? chromaFirstActiveLine : firstActiveLine;
-    const int uvActiveVideoStart = chromaFrame ? chromaActiveVideoStart : activeVideoStart;
-
-    for (int y = 0; y < height; y++) {
-        auto *yRow = reinterpret_cast<float *>(reinterpret_cast<uint8_t *>(yData) + y * yStride);
-
-        if (y < activeHeight) {
-            // Access ComponentFrame at the correct input line (with firstActiveLine offset)
-            const double *srcY = lumaFrame.y(firstActiveLine + y) + activeVideoStart;
-
-            for (int x = 0; x < activeWidth; x++) {
-                // Y: subtract yOffset and multiply by yScale, normalize to [0, 1]
-                yRow[x] = static_cast<float>((srcY[x] - yOffset) * yScale);
-            }
-            // Fill horizontal padding with black (Y=0)
-            for (int x = activeWidth; x < width; x++) {
-                yRow[x] = 0.0f;
-            }
-        } else {
-            // Fill vertical padding with black (Y=0)
-            for (int x = 0; x < width; x++) {
-                yRow[x] = 0.0f;
+    try {
+        if (dropoutCorrect) {
+            chd_dropout_stats_t st;
+            if (src->lastDropoutStats(st)) {
+                extra.hasDropoutStats = true;
+                extra.dropoutCorrected = st.corrected;
+                extra.dropoutFailed = st.failed;
+                extra.dropoutTotalDistance = st.total_distance;
             }
         }
 
-        // For color output, also convert U/V planes
-        if (!isMono) {
-            auto *uRow = reinterpret_cast<float *>(reinterpret_cast<uint8_t *>(uData) + y * uStride);
-            auto *vRow = reinterpret_cast<float *>(reinterpret_cast<uint8_t *>(vData) + y * vStride);
+        if (isSecam) {
+            chd_chroma_ident_report_t rep;
+            if (chd_frame_get_chroma_ident(f, &rep) == CHD_OK) {
+                extra.hasSecamComponent = true;
+                extra.secamFirstRowComponent =
+                    (rep.first_row_component == CHD_CHROMA_ROW_DR) ? 1 : 0;
+            }
+        }
 
-            if (y < activeHeight) {
-                // Get chroma from the appropriate source
-                // (separate chroma TBC or same TBC as luma)
-                const double *srcU = uvSourceFrame.u(uvFirstActiveLine + y) + uvActiveVideoStart;
-                const double *srcV = uvSourceFrame.v(uvFirstActiveLine + y) + uvActiveVideoStart;
+        // Plane mapping per VS format. RGB: VS plane 0/1/2 = R/G/B.
+        chd_plane_t planeMap[3];
+        int mapCount;
+        switch (vsFormat) {
+            case VSFormat::Gray:
+                planeMap[0] = CHD_PLANE_Y;
+                mapCount = 1;
+                break;
+            case VSFormat::RGB:
+                planeMap[0] = CHD_PLANE_R;
+                planeMap[1] = CHD_PLANE_G;
+                planeMap[2] = CHD_PLANE_B;
+                mapCount = 3;
+                break;
+            default:  // YUV444 / YUV440
+                planeMap[0] = CHD_PLANE_Y;
+                planeMap[1] = CHD_PLANE_CB;
+                planeMap[2] = CHD_PLANE_CR;
+                mapCount = 3;
+                break;
+        }
 
-                for (int x = 0; x < activeWidth; x++) {
-                    // Cb/Cr: multiply by scale to normalize to approximately
-                    // [-0.5, 0.5]
-                    uRow[x] = static_cast<float>(srcU[x] * cbScale);
-                    vRow[x] = static_cast<float>(srcV[x] * crScale);
+        const int planes = numPlanes < mapCount ? numPlanes : mapCount;
+        const size_t rowBytes = static_cast<size_t>(width) * sizeof(float);
+
+        for (int i = 0; i < planes; i++) {
+            const chd_plane_t p = planeMap[i];
+            const float *srcData = nullptr;
+            ptrdiff_t srcStride = 0;
+            chd_status_t s = chd_frame_get_plane_float(f, p, &srcData, &srcStride);
+            if (s != CHD_OK) {
+                throw VSAnalogException(std::string("failed to read plane: ") +
+                                        chd_status_str(s));
+            }
+
+            auto *dst = reinterpret_cast<uint8_t *>(planeData[i]);
+            const auto dstStride = static_cast<ptrdiff_t>(planeStride[i]);
+            const auto *srcBytes = reinterpret_cast<const uint8_t *>(srcData);
+
+            const bool subsampledChroma =
+                (vsFormat == VSFormat::YUV440) &&
+                (p == CHD_PLANE_CB || p == CHD_PLANE_CR);
+
+            if (subsampledChroma) {
+                // Line-sequential 4:4:0 chroma. libchromadec weaves each plane
+                // by output-row parity, which is the interleave the VS chroma
+                // plane wants, and the plane spans the whole half-height, so it
+                // copies row for row. first_frame_row names the frame row plane
+                // row 0 was decoded from, not the plane's topmost line, so it
+                // is not an offset to place the plane at.
+                chd_plane_info_t pi;
+                if (chd_frame_get_plane_info(f, p, &pi) != CHD_OK) {
+                    throw VSAnalogException("failed to read chroma plane info");
                 }
-                // Fill horizontal padding with neutral chroma (U=V=0)
-                for (int x = activeWidth; x < width; x++) {
-                    uRow[x] = 0.0f;
-                    vRow[x] = 0.0f;
+                const int vsChromaHeight = height / 2;
+                if (pi.height != vsChromaHeight) {
+                    throw VSAnalogException(
+                        "4:4:0 chroma plane has " + std::to_string(pi.height) +
+                        " rows, expected " + std::to_string(vsChromaHeight));
+                }
+                const int copyW = pi.width < width ? pi.width : width;
+                const size_t copyBytes = static_cast<size_t>(copyW) * sizeof(float);
+                for (int r = 0; r < vsChromaHeight; r++) {
+                    auto *row = dst + r * dstStride;
+                    std::memcpy(row, srcBytes + r * srcStride, copyBytes);
+                    if (copyBytes < rowBytes) {
+                        std::memset(row + copyBytes, 0, rowBytes - copyBytes);
+                    }
                 }
             } else {
-                // Fill vertical padding with neutral chroma (U=V=0)
-                for (int x = 0; x < width; x++) {
-                    uRow[x] = 0.0f;
-                    vRow[x] = 0.0f;
+                for (int y = 0; y < height; y++) {
+                    std::memcpy(dst + y * dstStride, srcBytes + y * srcStride,
+                                rowBytes);
                 }
             }
         }
+    } catch (...) {
+        chd_frame_free(f);
+        throw;
     }
+
+    chd_frame_free(f);
 }

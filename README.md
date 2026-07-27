@@ -15,8 +15,12 @@ The primary function provided by the high-level API is
 `vsanalog.decode_4fsc_video(…)`, which decodes 4𝑓𝑠𝑐-sampled analog video
 signals to digital video clips. It reads time-base-corrected captures from
 [ld-decode](https://github.com/happycube/ld-decode) and
-[vhs-decode](https://github.com/oyvindln/vhs-decode) then returns `YUV444PS`
-(32-bit float) for color decodes, `GRAYS` for monochrome.
+[vhs-decode](https://github.com/oyvindln/vhs-decode) (`.tbc`) as well as the
+newer CVBS format (`.composite`, or `.y`/`.c` for separated luma/chroma),
+detected by file extension. It returns 32-bit float clips: `YUV444PS` (default),
+`RGBS` (`color_family="rgb"`), `GRAYS` (`color_family="gray"`), or `YUV440PS`
+for SECAM. NTSC (Comb), PAL (Transform/PalColour), SECAM, and neural-network
+composite decoders are available.
 
 Example:
 ```python
@@ -52,12 +56,13 @@ detelecined = field_matched.vivtc.VDecimate()
 
 ## Layout
 
-| Directory   | Description                                                                                      |
-|-------------|--------------------------------------------------------------------------------------------------|
-| `src/`      | C++ VapourSynth plugin source (plugin entrypoint, TBC (incl. chroma) decode, dropout correction) |
-| `python/`   | Python package (`vsanalog`) with type-hinted wrapper and PyInstaller hooks                       |
-| `extern/`   | Git submodules (`ld-decode-tools`)                                                               |
-| `docs/`     | Sphinx documentation source                                                                      |
+| Directory      | Description                                                                            |
+|----------------|----------------------------------------------------------------------------------------|
+| `src/`         | C++ VapourSynth plugin source (plugin entrypoint + libchromadec wrapper)               |
+| `python/`      | Python package (`vsanalog`) with type-hinted wrapper and PyInstaller hooks             |
+| `subprojects/` | Meson wrap for [libchromadec](https://github.com/JustinTArthur/libchromadec)          |
+| `tools/`       | NN model manifest + fetch/convert helpers used at build time                           |
+| `docs/`        | Sphinx documentation source                                                            |
 
 ## Installing
 
@@ -73,31 +78,39 @@ when you use the Python module.
 Alternatively, obtain or 
 [build](https://vapoursynth-analog.justinarthur.com/en/latest/building.html)
 the plugin for your operating system and place vsanalog.dll, vsanalog.dylib,
-or vsanalog.so into your VapourSynth plugins directory. You'll need the
-following runtime dependencies:
-- **VapourSynth** (>= R55)
-- **Qt6** (Core module)
-- **FFTW3**
-- **SQLite3**
+or vsanalog.so into your VapourSynth plugins directory. The released plugin
+binaries need only **VapourSynth** (>= R55): libchromadec, its SQLite, and FFTW
+are linked into the plugin. They differ from the wheel in two ways — the
+neural-network decoders are built only on macOS (native CoreML; the Linux and
+Windows binaries omit ONNX Runtime), and no model weights are bundled, so
+neural decoding through them takes a `model_path` you supply.
+
+### GPU-accelerated neural decoding
+
+The PyPI wheels run neural decoders on CPU (Linux/Windows) or Apple CoreML
+(macOS). GPU-execution-provider wheels are too large for PyPI and are published
+separately (on GitHub Releases, or the project download site when they exceed
+the Release asset size limit): CUDA/TensorRT (Nvidia) and MIGraphX (AMD) for
+Linux, and CUDA (Nvidia) and DirectML (any DX12 GPU) for Windows. Install the
+matching wheel with `pip install <url>`.
+
+The CUDA and MIGraphX wheels carry a device-resident FFT pipeline linked
+against the vendor runtime, so they **require** a CUDA 12.x or ROCm 7.x
+installation — without it the plugin does not load at all, taking the ordinary
+composite decoders with it. The DirectML wheel and the PyPI wheels have no such
+requirement.
 
 ## Implementation Notes
 Signal decoding functionality comes from
-[ld-decode-tools](https://github.com/simoninns/ld-decode-tools)’
-ld-chroma-decoder. This was done to take advantage of great
-work already done on that project including the composite video
-separation/transformation decode processes, which would have been hard to
-replicate.
+[libchromadec](https://github.com/JustinTArthur/libchromadec), a Qt-free C-ABI
+library extracted from ld-chroma-decoder. It's pulled in as a Meson git wrap
+and linked statically, along with the trimmed SQLite it bundles, so this plugin
+has no Qt or system-SQLite dependency at all. libchromadec supplies the composite
+separation/transformation decoders (NTSC/PAL/SECAM/mono), the CVBS and TBC
+readers, dropout correction, and the neural-network decoders.
 
-Using ld-decode-tools’ code directly (in a submodule here) forces a few design
-decisions:
-* To ease legal distribution of this plugin, I must make this project available
-  under the GPL 3 license or one that’s compatible.
-* ld-chroma-decoder’s code relies on QtCore and Qt’s SQLite plugin which would
-  make them dependencies. I had a machine learning model write a pure
-  SQLite alternative to the JSON to SQLite metadata sidecar converter.
-  By avoiding Qt’s SQLite plugin, the plugin is less likely to cause
-  crashes from a symbol collision with another linked Qt such as PyQt’s when
-  using vspreview.
+To ease legal distribution, this project is available under the GPL 3 license
+(or a compatible one), matching libchromadec.
 
 Machine learning (Claude Opus 4.5 model) was heavily leveraged in the early
 development of this plugin to reduce the tedium of gluing the various
@@ -105,11 +118,13 @@ components together.
 
 ## Alternatives
 * jsaowji’s [ldzeug2](https://github.com/jsaowji/ldzeug2) is an excellent
-  alternative VapourSynth video source for TBC files and provides neural
-  network approaches to separating composited luma and chroma
-  components—something that vapoursynth-analog doesn’t have. It moves more
-  4𝑓𝑠𝑐 processing to the Python domain for flexible scripting opportunities.
-  It focuses on composite NTSC, ST 170, and Japan format signals.
+  alternative VapourSynth video source for TBC files that pioneered the neural
+  network approaches to separating composited luma and chroma components.
+  vapoursynth-analog now exposes those models too (via libchromadec's
+  `ldzeug2_color_cnn` / `ldzeug2_luma_sep` decoders), alongside asdfqazsnbb's
+  nnTransform3D. ldzeug2 moves more 4𝑓𝑠𝑐 processing to the Python domain for
+  flexible scripting; it focuses on composite NTSC, ST 170, and Japan format
+  signals.
 * ld-decode-tools comes with an `ld-chroma-decoder` tool to decode TBC
   files to component R′G′B′ or Y′Cb′Cr′ stream output for use in command line
   workflows and an `ld-dropout-correct` tool for generating a pre-corrected

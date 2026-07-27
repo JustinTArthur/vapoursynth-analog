@@ -3,3 +3,14 @@ option('build_wheel',
     value: false,
     description: 'Build as a Python wheel that installs plugin to vapoursynth/plugins package.',
 )
+
+# Execution provider libchromadec is built with for this (wheel) variant.
+# Drives the chromadec subproject's with_onnxruntime/with_cuda/with_rocm/
+# with_coreml options. On macOS the value is ignored: we always build native
+# CoreML with no ONNX Runtime. 'none' disables the NN decoders entirely.
+option('ep',
+    type: 'combo',
+    choices: ['cpu', 'cuda', 'migraphx', 'directml', 'coreml', 'none'],
+    value: 'cpu',
+    description: 'Neural-network execution provider for the bundled libchromadec.',
+)

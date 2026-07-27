@@ -1,3 +1,0 @@
-// Stub QSqlError header - content provided by sqliteio.h stub
-// This file exists only to satisfy #include <QSqlError>
-#include "sqliteio.h"

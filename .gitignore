@@ -43,6 +43,12 @@ build/
 buildDir/
 Build/
 build-*/
+build_*/
+
+# Distribution output
+/dist/
+/wheelhouse/
+/plugin-out/
 
 # Temporary files
 *.tmp
@@ -77,3 +83,15 @@ Thumbs.db
 
 # Docs build output
 docs/_build/
+
+# NN model weights — fetched + checksum-verified in CI (tools/models.lock),
+# converted to CoreML .mlpackage on macOS. Never committed (README.md is kept).
+/python/vsanalog/models/nntransform3d/
+/python/vsanalog/models/ldzeug/
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
+# Python virtual environments
+*.venv/
+.venv*/
