@@ -72,8 +72,37 @@ Changelog
 - Added ``AnalogFirstActiveSample`` / ``AnalogLastActiveSample`` /
   ``AnalogFirstActiveLine`` / ``AnalogLastActiveLine`` frame properties
   reporting the resolved window in those same standards coordinates.
+- Added ``annotate_dropouts``, reporting where each frame's dropouts are
+  instead of concealing them, in an ``AnalogDropoutSpans`` frame property —
+  a flat array of ``y``, ``x_start``, ``x_end``, ``origin`` per region, in the
+  decoded clip's own pixel coordinates. It is independent of
+  ``dropout_correct``, so damaged regions can be handed to another filter
+  rather than replaced from neighbouring lines, and ``dropout_overcorrect``
+  widens what gets reported just as it widens what correction overwrites. On
+  SECAM the regions also cover the FM click concealment the decoder performed
+  itself, distinguished by ``origin``.
+- Added ``core.analog.create_dropouts_mask`` (``vsanalog.create_dropouts_mask``)
+  to rasterise those regions into a mask clip for ``core.std.MaskedMerge`` and
+  the other ``std`` mask functions, with ``origins`` to select which kinds of
+  region to draw. The mask matches the clip's dimensions and precision, so
+  subsampled output needs no special handling. ``vsanalog.dropout_spans``
+  reads the regions back as a list of named tuples.
+- A decode asking for dropout correction or annotation now warns when the
+  capture's ``.tbc.db`` sidecar carries no dropout metadata while its
+  ``.tbc.json`` does. The SQLite sidecar wins on existence alone, and releases
+  up to 0.2.3 wrote one themselves during a decode without copying the dropouts
+  across, so a capture decoded by an older version reports itself clean however
+  damaged it is. Nothing writes those sidecars now; delete the ``.tbc.db`` to
+  decode from the JSON.
 - ``phase_compensation`` now defaults to enabled, making burst-locked chroma
   demodulation the default.
+- Removed ``fpsnum`` and ``fpsden``. They were meant to convert to a constant
+  frame rate the way ``bs.VideoSource`` does, but only ever retagged the rate
+  and rescaled the frame count — no frame was dropped or duplicated, so raising
+  the rate advertised frames past the end of the capture and lowering it put the
+  tail out of reach. A 4𝑓𝑠𝑐 capture is constant-rate by construction, leaving
+  nothing to convert; retag with ``core.std.AssumeFPS``, and retime after
+  deinterlacing, where dropping a frame doesn't mean dropping two fields.
 - An intermediate SQLite metadata sidecar is no longer created for JSON files.
   JSON metadata is processed natively.
 - Decoder diagnostics now arrive as VapourSynth log messages instead of going

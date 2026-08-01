@@ -277,3 +277,23 @@ chd_frame_t *ChromaDecSource::decodeFrame(int64_t frameIndex) {
 bool ChromaDecSource::lastDropoutStats(chd_dropout_stats_t &out) const {
     return chd_decoder_get_last_dropout_stats(d_, &out) == CHD_OK;
 }
+
+void ChromaDecSource::dropoutSpans(int64_t frameIndex, bool overcorrect,
+                                   std::vector<chd_dropout_span_t> &out) const {
+    chd_dropout_span_t *spans = nullptr;
+    size_t count = 0;
+    beginChdCall();
+    chd_status_t s = chd_decoder_get_dropout_spans(
+        d_, frameIndex,
+        overcorrect ? CHD_DROPOUT_OVERCORRECT : CHD_DROPOUT_DETECTED,
+        &spans, &count);
+    if (s != CHD_OK) {
+        throw VSAnalogException(chdError("failed to read dropout spans", s));
+    }
+    // A clean frame yields a null pointer, not an empty allocation.
+    out.clear();
+    if (count > 0) {
+        out.assign(spans, spans + count);
+    }
+    chd_dropout_spans_free(spans);
+}

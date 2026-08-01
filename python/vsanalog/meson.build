@@ -1,5 +1,7 @@
 py.install_sources(
     '__init__.py',
+    'plugin.py',
+    'dropouts.py',
     'secam.py',
     'py.typed',
     subdir: 'vsanalog',

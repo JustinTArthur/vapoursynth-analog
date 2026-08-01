@@ -11,13 +11,83 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include <VapourSynth4.h>
 #include <VSHelper4.h>
+
+// Ints per span in the AnalogDropoutSpans property: y, x_start, x_end, origin.
+constexpr int kDropoutSpanStride = 4;
+
+// A capture's SQLite sidecar wins over its JSON one on existence alone, with no
+// check that it holds as much. Releases up to 0.2.3 wrote that sidecar
+// themselves during a decode and left the dropout metadata out of it, so a
+// capture decoded back then carries a .tbc.db that permanently hides the
+// dropouts its .tbc.json still lists — from correction and annotation alike,
+// and without complaint. Nothing writes those sidecars now, but the ones
+// already on disk keep answering first, so say so rather than report a damaged
+// capture as clean.
+//
+// SQLite keeps its schema as the plain text of the statements that built it, so
+// searching the file for the table beats linking a SQL parser in to ask. Read
+// in overlapping chunks: the schema sits wherever its pages were allocated, not
+// necessarily near the front.
+bool sidecarOmitsDropouts(const std::filesystem::path &source) {
+    std::filesystem::path db = source;
+    db += ".db";
+    std::filesystem::path json = source;
+    json += ".json";
+    std::error_code ec;
+    // Only the pairing is a problem: a .db with no .json beside it is all the
+    // metadata there is, and nothing better is being shadowed.
+    if (!std::filesystem::exists(db, ec) || !std::filesystem::exists(json, ec))
+        return false;
+
+    std::ifstream in(db, std::ios::binary);
+    if (!in)
+        return false;
+
+    static constexpr std::string_view kTable = "drop_outs";
+    static constexpr size_t kChunk = 1u << 20;
+    const size_t overlap = kTable.size() - 1;
+    std::string buffer(kChunk + overlap, '\0');
+    size_t carried = 0;
+    while (in.read(buffer.data() + carried, static_cast<std::streamsize>(kChunk)) ||
+           in.gcount() > 0) {
+        const size_t filled = carried + static_cast<size_t>(in.gcount());
+        if (std::string_view(buffer.data(), filled).find(kTable) != std::string_view::npos)
+            return false;
+        carried = std::min(filled, overlap);
+        std::memmove(buffer.data(), buffer.data() + filled - carried, carried);
+    }
+    return true;
+}
+
+// Warn for every capture whose dropouts a stale sidecar is swallowing. Only
+// worth saying when the decode was going to act on them; a plain decode is
+// unaffected by what the sidecar left out.
+void warnIfDropoutsHidden(const std::vector<std::filesystem::path> &sources,
+                          VSCore *core, const VSAPI *vsapi) {
+    for (const auto &source : sources) {
+        if (!sidecarOmitsDropouts(source))
+            continue;
+        const std::string message =
+            "decode_4fsc_video: " + source.filename().string() + ".db has no dropout "
+            "metadata and takes precedence over " + source.filename().string() +
+            ".json, which does. No dropout will be corrected or reported for this "
+            "source. The .db was written by vapoursynth-analog 0.2.3 or earlier and "
+            "nothing needs it now: move or delete it to decode from the .json.";
+        vsapi->logMessage(mtWarning, message.c_str(), core);
+    }
+}
 
 // Holds libchromadec's diagnostics on this core's log for the instance's
 // lifetime. Both the construction error path and the free callback destroy the
@@ -34,8 +104,6 @@ struct DecodeConfig {
     LogAttachment logAttachment;
     VSVideoInfo VI = {};
     std::unique_ptr<VSAnalog4fscSource> V;
-    int64_t FPSNum = -1;
-    int64_t FPSDen = -1;
     int numPlanes = 3;
     bool isRGB = false;               // RGB output → _Matrix=0
     bool isNTSCChromaticity = false;  // NTSC / PAL-M
@@ -165,11 +233,186 @@ static const VSFrame *VS_CC VSAnalog4fscSourceGetFrame(
         vsapi->mapSetInt(props, "AnalogDropoutsTotalDistance", extra.dropoutTotalDistance, maReplace);
     }
 
+    // Dropout regions as one flat (y, x_start, x_end, origin) run per span,
+    // rather than four parallel arrays: a stride of 4 means the array length is
+    // never 1 (would cause VS Python layer to hand a 1-element array back as
+    // a bare int instead of a list. Property is present but empty on a clean
+    // frame, informing create_dropouts_mask the clip was annotated at all.
+    if (extra.hasDropoutSpans) {
+        std::vector<int64_t> flat;
+        flat.reserve(extra.dropoutSpans.size() * kDropoutSpanStride);
+        for (const auto &span : extra.dropoutSpans) {
+            flat.push_back(span.y);
+            flat.push_back(span.x_start);
+            flat.push_back(span.x_end);
+            flat.push_back(span.origin);
+        }
+        // mapSetIntArray reads nothing at size 0, but never hand it a null.
+        static constexpr int64_t empty = 0;
+        vsapi->mapSetIntArray(props, "AnalogDropoutSpans",
+                              flat.empty() ? &empty : flat.data(),
+                              static_cast<int>(flat.size()));
+    }
+
     return dst;
 }
 
 static void VS_CC VSAnalog4fscSourceFree(void *instanceData, VSCore *, const VSAPI *) {
     delete static_cast<DecodeConfig *>(instanceData);
+}
+
+// Rasterises the AnalogDropoutSpans property into a mask clip.
+struct DropoutMaskConfig {
+    VSNode *node = nullptr;
+    VSVideoInfo VI = {};
+    // Span origins to draw; empty draws every origin.
+    std::vector<int64_t> origins;
+
+    bool wanted(int64_t origin) const {
+        if (origins.empty()) return true;
+        return std::find(origins.begin(), origins.end(), origin) != origins.end();
+    }
+};
+
+// Set every sample of a mask row in [xStart, xEnd) to the "dropped" value.
+static void fillMaskRun(uint8_t *row, int xStart, int xEnd, const VSVideoFormat &fmt) {
+    if (fmt.sampleType == stFloat) {
+        auto *p = reinterpret_cast<float *>(row);
+        std::fill(p + xStart, p + xEnd, 1.0f);
+    } else if (fmt.bytesPerSample == 1) {
+        std::fill(row + xStart, row + xEnd, static_cast<uint8_t>((1u << fmt.bitsPerSample) - 1));
+    } else {
+        auto *p = reinterpret_cast<uint16_t *>(row);
+        std::fill(p + xStart, p + xEnd, static_cast<uint16_t>((1u << fmt.bitsPerSample) - 1));
+    }
+}
+
+static const VSFrame *VS_CC DropoutMaskGetFrame(
+    int n, int activationReason, void *instanceData, void **,
+    VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi
+) {
+    auto *D = static_cast<DropoutMaskConfig *>(instanceData);
+
+    if (activationReason == arInitial) {
+        vsapi->requestFrameFilter(n, D->node, frameCtx);
+        return nullptr;
+    }
+    if (activationReason != arAllFramesReady) {
+        return nullptr;
+    }
+
+    const VSFrame *src = vsapi->getFrameFilter(n, D->node, frameCtx);
+    const VSMap *srcProps = vsapi->getFramePropertiesRO(src);
+
+    // -1 is an absent property, 0 a present-but-empty one: the clip was
+    // annotated and this frame simply has no dropouts.
+    const int numElements = vsapi->mapNumElements(srcProps, "AnalogDropoutSpans");
+    if (numElements < 0) {
+        vsapi->freeFrame(src);
+        vsapi->setFilterError(
+            "create_dropouts_mask: clip has no AnalogDropoutSpans property; decode it "
+            "with analog.decode_4fsc_video(annotate_dropouts=1)", frameCtx);
+        return nullptr;
+    }
+    if (numElements % kDropoutSpanStride != 0) {
+        vsapi->freeFrame(src);
+        vsapi->setFilterError(
+            "create_dropouts_mask: AnalogDropoutSpans length is not a multiple of 4",
+            frameCtx);
+        return nullptr;
+    }
+
+    // Carries _FieldBased, the SAR and the durations onto the mask; the colour
+    // props copied with them are inert on a single-plane clip.
+    VSFrame *dst = vsapi->newVideoFrame(&D->VI.format, D->VI.width, D->VI.height, src, core);
+    if (!dst) {
+        vsapi->freeFrame(src);
+        vsapi->setFilterError("create_dropouts_mask: failed to allocate output frame", frameCtx);
+        return nullptr;
+    }
+
+    auto *maskData = vsapi->getWritePtr(dst, 0);
+    const ptrdiff_t maskStride = vsapi->getStride(dst, 0);
+    // Clean is zero in every supported format, padding included.
+    std::memset(maskData, 0, static_cast<size_t>(maskStride) * D->VI.height);
+
+    const int64_t *spans = numElements > 0
+        ? vsapi->mapGetIntArray(srcProps, "AnalogDropoutSpans", nullptr)
+        : nullptr;
+    for (int i = 0; i < numElements; i += kDropoutSpanStride) {
+        const int64_t y = spans[i];
+        if (!D->wanted(spans[i + 3])) continue;
+        if (y < 0 || y >= D->VI.height) continue;
+        // libchromadec clips spans to the output framing, so this only guards
+        // against a hand-edited property.
+        const auto xStart = static_cast<int>(std::clamp<int64_t>(spans[i + 1], 0, D->VI.width));
+        const auto xEnd = static_cast<int>(std::clamp<int64_t>(spans[i + 2], 0, D->VI.width));
+        if (xEnd <= xStart) continue;
+        fillMaskRun(maskData + y * maskStride, xStart, xEnd, D->VI.format);
+    }
+
+    VSMap *dstProps = vsapi->getFramePropertiesRW(dst);
+    // A mask occupies the whole 0..1 scale, unlike the matrix-derived clip it
+    // came from.
+    vsapi->mapSetInt(dstProps, "_ColorRange", 0, maReplace);
+    vsapi->mapSetInt(dstProps, "_Range", 1, maReplace);
+    // Inherited from a YUV/RGB parent, these describe a colour encoding the
+    // mask does not have.
+    vsapi->mapDeleteKey(dstProps, "_Matrix");
+    vsapi->mapDeleteKey(dstProps, "_Primaries");
+    vsapi->mapDeleteKey(dstProps, "_ChromaLocation");
+
+    vsapi->freeFrame(src);
+    return dst;
+}
+
+static void VS_CC DropoutMaskFree(void *instanceData, VSCore *, const VSAPI *vsapi) {
+    auto *D = static_cast<DropoutMaskConfig *>(instanceData);
+    vsapi->freeNode(D->node);
+    delete D;
+}
+
+static void VS_CC CreateDropoutsMask(const VSMap *In, VSMap *Out, void *, VSCore *Core, const VSAPI *vsapi) {
+    auto *D = new DropoutMaskConfig();
+    D->node = vsapi->mapGetNode(In, "clip", 0, nullptr);
+    D->VI = *vsapi->getVideoInfo(D->node);
+
+    if (!vsh::isConstantVideoFormat(&D->VI)) {
+        vsapi->mapSetError(Out, "create_dropouts_mask: clip must have a constant format");
+        DropoutMaskFree(D, Core, vsapi);
+        return;
+    }
+
+    // Match the clip's precision so the mask drops straight into
+    // std.MaskedMerge, which requires an equal bit depth.
+    const VSVideoFormat srcFormat = D->VI.format;
+    const bool supported = (srcFormat.sampleType == stFloat && srcFormat.bitsPerSample == 32) ||
+                           (srcFormat.sampleType == stInteger && srcFormat.bitsPerSample >= 8 &&
+                            srcFormat.bitsPerSample <= 16);
+    if (!supported) {
+        vsapi->mapSetError(
+            Out, "create_dropouts_mask: clip must be 8-16 bit integer or 32-bit float");
+        DropoutMaskFree(D, Core, vsapi);
+        return;
+    }
+    if (!vsapi->queryVideoFormat(&D->VI.format, cfGray, srcFormat.sampleType,
+                                 srcFormat.bitsPerSample, 0, 0, Core)) {
+        vsapi->mapSetError(Out, "create_dropouts_mask: failed to query mask format");
+        DropoutMaskFree(D, Core, vsapi);
+        return;
+    }
+
+    int err;
+    const int numOrigins = vsapi->mapNumElements(In, "origins");
+    for (int i = 0; i < numOrigins; i++) {
+        const int64_t origin = vsapi->mapGetInt(In, "origins", i, &err);
+        if (!err) D->origins.push_back(origin);
+    }
+
+    VSFilterDependency deps[] = {{D->node, rpStrictSpatial}};
+    vsapi->createVideoFilter(Out, "create_dropouts_mask", &D->VI,
+                             DropoutMaskGetFrame, DropoutMaskFree,
+                             fmParallel, deps, 1, D, Core);
 }
 
 // Threshold for the decoder's own diagnostics, which arrive as core log
@@ -236,13 +479,6 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
     D->logAttachment.core = Core;
 
     try {
-        D->FPSNum = vsapi->mapGetInt(In, "fpsnum", 0, &err);
-        if (err) D->FPSNum = -1;
-        D->FPSDen = vsapi->mapGetInt(In, "fpsden", 0, &err);
-        if (err) D->FPSDen = 1;
-        if (D->FPSDen < 1)
-            throw VSAnalogException("FPS denominator needs to be 1 or greater");
-
         VSAnalog4fscOptions Opts;
         Opts.decoder = getOptString(In, "decoder", vsapi);
         Opts.colorFamily = getOptString(In, "color_family", vsapi);
@@ -295,6 +531,9 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         int dropoutIntra = static_cast<int>(vsapi->mapGetInt(In, "dropout_intra", 0, &err));
         if (err) dropoutIntra = 0;
         Opts.dropoutIntra = (dropoutIntra != 0);
+        int annotateDropouts = static_cast<int>(vsapi->mapGetInt(In, "annotate_dropouts", 0, &err));
+        if (err) annotateDropouts = 0;
+        Opts.annotateDropouts = (annotateDropouts != 0);
 
         int numExtraLuma = vsapi->mapNumElements(In, "dropout_composite_or_luma_extra_sources");
         for (int i = 0; i < numExtraLuma; i++) {
@@ -305,6 +544,18 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         for (int i = 0; i < numExtraChroma; i++) {
             const char *path = vsapi->mapGetData(In, "dropout_chroma_extra_sources", i, &err);
             if (!err && path) Opts.dropoutExtraChromaSources.emplace_back(path);
+        }
+
+        if (Opts.dropoutCorrect || Opts.annotateDropouts) {
+            std::vector<std::filesystem::path> dropoutSources{Source};
+            if (hasChromaSource) dropoutSources.push_back(ChromaSource);
+            dropoutSources.insert(dropoutSources.end(),
+                                  Opts.dropoutExtraLumaSources.begin(),
+                                  Opts.dropoutExtraLumaSources.end());
+            dropoutSources.insert(dropoutSources.end(),
+                                  Opts.dropoutExtraChromaSources.begin(),
+                                  Opts.dropoutExtraChromaSources.end());
+            warnIfDropoutsHidden(dropoutSources, Core, vsapi);
         }
 
         D->V = std::make_unique<VSAnalog4fscSource>(
@@ -361,17 +612,6 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         D->VI.fpsDen = fps.Den;
         vsh::reduceRational(&D->VI.fpsNum, &D->VI.fpsDen);
 
-        // Custom FPS override.
-        if (D->FPSNum > 0) {
-            vsh::reduceRational(&D->FPSNum, &D->FPSDen);
-            auto timeBase = D->V->GetTimeBase();
-            D->VI.fpsDen = D->FPSDen;
-            D->VI.fpsNum = D->FPSNum;
-            D->VI.numFrames = std::max(1,
-                static_cast<int>((D->V->GetDuration() * D->VI.fpsNum) *
-                                 timeBase.ToDouble() / D->VI.fpsDen + 0.5));
-        }
-
     } catch (const std::exception &e) {
         delete D;
         vsapi->mapSetError(Out, (std::string("decode_4fsc_video: ") + e.what()).c_str());
@@ -424,10 +664,19 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "dropout_intra:int:opt;"
         "dropout_composite_or_luma_extra_sources:data[]:opt;"
         "dropout_chroma_extra_sources:data[]:opt;"
-        "fpsnum:int:opt;"
-        "fpsden:int:opt;",
+        "annotate_dropouts:int:opt;",
         "clip:vnode;",
         Create4fscSource,
+        nullptr,
+        plugin
+    );
+
+    vspapi->registerFunction(
+        "create_dropouts_mask",
+        "clip:vnode;"
+        "origins:int[]:opt;",
+        "clip:vnode;",
+        CreateDropoutsMask,
         nullptr,
         plugin
     );

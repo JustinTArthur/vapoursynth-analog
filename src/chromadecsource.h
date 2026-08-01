@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <chromadec/chromadec.h>
 
@@ -81,6 +82,12 @@ public:
     // Returns an owning chd_frame_t*; caller frees with chd_frame_free.
     chd_frame_t *decodeFrame(int64_t frameIndex);
     bool lastDropoutStats(chd_dropout_stats_t &out) const;
+    // The frame's dropout spans, in the committed output framing. Reads
+    // metadata rather than decoding, but the decoder's own concealment spans
+    // are only cached once the frame has been decoded, so call this after
+    // decodeFrame to see them.
+    void dropoutSpans(int64_t frameIndex, bool overcorrect,
+                      std::vector<chd_dropout_span_t> &out) const;
 
 private:
     void afterOpen();  // populate vinfo_

@@ -50,6 +50,10 @@ struct VSAnalog4fscOptions {
     bool dropoutCorrect = false;
     bool dropoutOvercorrect = false;
     bool dropoutIntra = false;
+    // Report each frame's dropout regions as a frame property. Independent of
+    // correction; dropoutOvercorrect widens what gets reported, matching the
+    // footprint correction would touch.
+    bool annotateDropouts = false;
     std::vector<std::filesystem::path> dropoutExtraLumaSources;
     std::vector<std::filesystem::path> dropoutExtraChromaSources;
 
@@ -64,9 +68,6 @@ struct VSAnalog4fscOptions {
 struct VSAnalogRational {
     int64_t Num;
     int64_t Den;
-    double ToDouble() const {
-        return static_cast<double>(Num) / static_cast<double>(Den);
-    }
 };
 
 // Main 4FSC source: owns a ChromaDecSource and translates it into a VapourSynth
@@ -90,8 +91,6 @@ public:
     int GetHeight() const { return height; }
     int64_t GetNumFrames() const { return numFrames; }
     VSAnalogRational GetFPS() const { return fps; }
-    VSAnalogRational GetTimeBase() const { return {fps.Den, fps.Num}; }
-    int64_t GetDuration() const { return numFrames; }
 
     // Frame-property inputs.
     bool IsNTSCChromaticity() const { return isNtscChromaticity; }
@@ -115,6 +114,9 @@ public:
         int64_t dropoutCorrected = 0;
         int64_t dropoutFailed = 0;
         int64_t dropoutTotalDistance = 0;
+        // Distinct from an empty span list, which is a genuinely clean frame.
+        bool hasDropoutSpans = false;
+        std::vector<chd_dropout_span_t> dropoutSpans;
         bool hasSecamComponent = false;
         int secamFirstRowComponent = 0;  // 0 = Db, 1 = Dr
     };
@@ -151,6 +153,8 @@ private:
     int lastActiveLine = 0;
     int firstActiveFrameLine = 0;
     bool dropoutCorrect = false;
+    bool dropoutOvercorrect = false;
+    bool annotateDropouts = false;
 };
 
 #endif // ANALOG4FSC_H

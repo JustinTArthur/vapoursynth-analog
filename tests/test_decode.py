@@ -146,6 +146,138 @@ def test_rgb_rejected_for_secam(secam_yc):
         clip.get_frame(0)
 
 
+def _first_frame_with_dropouts(clip, limit=60):
+    """``(n, spans)`` for the first annotated frame carrying dropouts.
+
+    Returns ``(None, None)`` if the capture is clean over the scanned range, so
+    callers can skip rather than fail on undamaged test media.
+    """
+    for n in range(min(limit, clip.num_frames)):
+        with clip.get_frame(n) as f:
+            spans = vsanalog.dropout_spans(f)
+        if spans:
+            return n, spans
+    return None, None
+
+
+def test_dropout_spans_absent_without_annotation(ntsc_tbc):
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc))
+    with clip.get_frame(0) as f:
+        assert "AnalogDropoutSpans" not in f.props
+        with pytest.raises(ValueError, match="annotate_dropouts"):
+            vsanalog.dropout_spans(f)
+
+
+def test_mask_rejects_unannotated_clip(ntsc_tbc):
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc))
+    with pytest.raises(vs.Error, match="annotate_dropouts"):
+        vsanalog.create_dropouts_mask(clip).get_frame(0)
+
+
+def test_annotated_clip_always_carries_spans(ntsc_tbc):
+    """Reading succeeds on every annotated frame, dropouts or not.
+
+    A clean frame carries the property empty rather than omitting it, which is
+    what separates "annotated, undamaged" from "never annotated". VapourSynth's
+    ``in`` reports False for a present-but-empty property, so presence can only
+    be probed by reading it.
+    """
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc), annotate_dropouts=True)
+    for n in range(min(4, clip.num_frames)):
+        with clip.get_frame(n) as f:
+            assert isinstance(vsanalog.dropout_spans(f), list)
+
+
+def test_mask_matches_clip_geometry(ntsc_tbc):
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc), annotate_dropouts=True)
+    mask = vsanalog.create_dropouts_mask(clip)
+    assert mask.format.name == "GrayS"
+    assert (mask.width, mask.height) == (clip.width, clip.height)
+    assert mask.num_frames == clip.num_frames
+    # Full-size is what MaskedMerge demands of a mask; it does any chroma
+    # resampling itself.
+    with vs.core.std.MaskedMerge(clip, clip, mask).get_frame(0):
+        pass
+
+
+def test_mask_marks_exactly_the_reported_spans(ntsc_tbc):
+    np = pytest.importorskip("numpy")
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc), annotate_dropouts=True)
+    n, spans = _first_frame_with_dropouts(clip)
+    if n is None:
+        pytest.skip("no dropouts in the scanned frames of this capture")
+
+    with vsanalog.create_dropouts_mask(clip).get_frame(n) as f:
+        arr = np.asarray(f[0])
+    painted = np.zeros(arr.shape, dtype=bool)
+    for span in spans:
+        assert 0 <= span.y < clip.height
+        assert 0 <= span.x_start < span.x_end <= clip.width
+        painted[span.y, span.x_start:span.x_end] = True
+    assert (arr[painted] == 1.0).all(), "a reported span was left unmarked"
+    assert not arr[~painted].any(), "the mask marks samples outside every span"
+
+
+def test_mask_origins_filter(ntsc_tbc):
+    np = pytest.importorskip("numpy")
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc), annotate_dropouts=True)
+    n, spans = _first_frame_with_dropouts(clip)
+    if n is None:
+        pytest.skip("no dropouts in the scanned frames of this capture")
+
+    # Concealment is a SECAM-only origin, so filtering to it blanks an NTSC mask.
+    assert all(s.origin == vsanalog.DropoutOrigin.SOURCE_METADATA for s in spans)
+    concealment_only = vsanalog.create_dropouts_mask(
+        clip, origins=[vsanalog.DropoutOrigin.DECODER_CONCEALMENT])
+    with concealment_only.get_frame(n) as f:
+        assert not np.asarray(f[0]).any()
+
+
+def test_overcorrect_widens_the_reported_spans(ntsc_tbc):
+    clip = vsanalog.decode_4fsc_video(str(ntsc_tbc), annotate_dropouts=True)
+    n, spans = _first_frame_with_dropouts(clip)
+    if n is None:
+        pytest.skip("no dropouts in the scanned frames of this capture")
+
+    widened = vsanalog.decode_4fsc_video(
+        str(ntsc_tbc), annotate_dropouts=True, dropout_overcorrect=True)
+    with widened.get_frame(n) as f:
+        wide_spans = vsanalog.dropout_spans(f)
+    covered = sum(s.x_end - s.x_start for s in spans)
+    wide_covered = sum(s.x_end - s.x_start for s in wide_spans)
+    assert wide_covered > covered
+
+
+def test_secam_reports_decoder_concealment(secam_yc):
+    """SECAM click concealment shows up alongside the sidecar's dropouts.
+
+    These regions exist only because the frame was decoded — nothing upstream
+    flagged them — so they are the part of the picture a metadata-only dropout
+    query cannot see.
+    """
+    luma, chroma = secam_yc
+    clip = vsanalog.decode_4fsc_video(
+        str(luma), str(chroma), decoder="secam", annotate_dropouts=True)
+    origins = set()
+    for n in range(min(4, clip.num_frames)):
+        with clip.get_frame(n) as f:
+            origins |= {s.origin for s in vsanalog.dropout_spans(f)}
+    assert vsanalog.DropoutOrigin.DECODER_CONCEALMENT in origins
+
+
+def test_secam_mask_is_full_height(secam_yc):
+    """4:4:0 takes the same full-size mask as any other clip."""
+    luma, chroma = secam_yc
+    clip = vsanalog.decode_4fsc_video(
+        str(luma), str(chroma), decoder="secam", annotate_dropouts=True)
+    assert clip.format.subsampling_h == 1
+    mask = vsanalog.create_dropouts_mask(clip)
+    assert mask.format.name == "GrayS"
+    assert mask.height == clip.height
+    with vs.core.std.MaskedMerge(clip, clip, mask).get_frame(0) as f:
+        assert f[1].shape[0] == clip.height // 2
+
+
 def test_diagnostics_reach_the_core_log(ntsc_tbc):
     """libchromadec's diagnostics arrive as VapourSynth log messages.
 
@@ -176,6 +308,67 @@ def test_diagnostics_reach_the_core_log(ntsc_tbc):
 def test_set_log_level_rejects_unknown_level():
     with pytest.raises(vs.Error):
         vsanalog.set_log_level("chatty")
+
+
+def test_warns_when_a_stale_db_sidecar_hides_dropouts(ntsc_tbc, tmp_path):
+    """A .tbc.db with no dropouts silently outranks a .tbc.json that has them.
+
+    Releases up to 0.2.3 wrote exactly that sidecar during a decode, so the
+    captures most likely to hit it are the ones this plugin has already seen.
+    Reproduced by copying the capture's own sidecar with the table dropped.
+    """
+    sqlite3 = pytest.importorskip("sqlite3")
+    source_db = ntsc_tbc.with_name(ntsc_tbc.name + ".db")
+    source_json = ntsc_tbc.with_name(ntsc_tbc.name + ".json")
+    if not source_db.is_file() or not source_json.is_file():
+        pytest.skip("capture needs both a .tbc.db and a .tbc.json for this test")
+
+    sample = tmp_path / ntsc_tbc.name
+    sample.symlink_to(ntsc_tbc)
+    (tmp_path / source_json.name).symlink_to(source_json)
+    stale = tmp_path / source_db.name
+    stale.write_bytes(source_db.read_bytes())
+    with sqlite3.connect(stale) as conn:
+        conn.execute("DROP TABLE IF EXISTS drop_outs")
+
+    seen: list[tuple[int, str]] = []
+    handle = vs.core.add_log_handler(lambda t, m: seen.append((int(t), m)))
+    try:
+        clip = vsanalog.decode_4fsc_video(str(sample), annotate_dropouts=True)
+        with clip.get_frame(0) as frame:
+            assert vsanalog.dropout_spans(frame) == []
+    finally:
+        vs.core.remove_log_handler(handle)
+
+    warnings = [m for t, m in seen if t == int(vs.MESSAGE_TYPE_WARNING) and ".db" in m]
+    assert warnings, seen
+
+    # A decode that isn't going to act on dropouts has nothing to be warned about.
+    quiet: list[tuple[int, str]] = []
+    handle = vs.core.add_log_handler(lambda t, m: quiet.append((int(t), m)))
+    try:
+        vsanalog.decode_4fsc_video(str(sample))
+    finally:
+        vs.core.remove_log_handler(handle)
+    assert not [m for t, m in quiet if ".db" in m], quiet
+
+
+def test_intact_db_sidecar_is_not_warned_about(ntsc_tbc, tmp_path):
+    """The warning is about what the sidecar lacks, not that it exists."""
+    source_db = ntsc_tbc.with_name(ntsc_tbc.name + ".db")
+    source_json = ntsc_tbc.with_name(ntsc_tbc.name + ".json")
+    if not source_db.is_file() or not source_json.is_file():
+        pytest.skip("capture needs both a .tbc.db and a .tbc.json for this test")
+    if b"drop_outs" not in source_db.read_bytes():
+        pytest.skip("this capture's .tbc.db has no drop_outs table to begin with")
+
+    seen: list[tuple[int, str]] = []
+    handle = vs.core.add_log_handler(lambda t, m: seen.append((int(t), m)))
+    try:
+        vsanalog.decode_4fsc_video(str(ntsc_tbc), annotate_dropouts=True)
+    finally:
+        vs.core.remove_log_handler(handle)
+    assert not [m for t, m in seen if ".db" in m], seen
 
 
 def test_returned_failures_are_not_also_logged(ntsc_tbc, tmp_path):

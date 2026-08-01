@@ -35,10 +35,9 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         dropout_correct=False, \
         dropout_overcorrect=False, \
         dropout_intra=False, \
+        annotate_dropouts=False, \
         dropout_composite_or_luma_extra_sources=None, \
-        dropout_chroma_extra_sources=None, \
-        fpsnum=None, \
-        fpsden=1)
+        dropout_chroma_extra_sources=None)
 
     Decode 4𝑓𝑠𝑐 (four times subcarrier frequency) sampled analog video
     signals to a digital video clip. The signal data must be orthogonal video
@@ -171,6 +170,13 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         Force intra-field-only dropout correction, avoiding inter-field
         borrowing artifacts on high-motion content.
 
+    :param bool annotate_dropouts:
+        Record each frame's dropout regions in the ``AnalogDropoutSpans`` frame
+        property, for :py:func:`vsanalog.dropout_spans` and
+        :py:func:`vsanalog.create_dropouts_mask`. Independent of
+        *dropout_correct*; *dropout_overcorrect* widens what gets reported.
+        See :ref:`dropout-annotation-py`.
+
     :param dropout_composite_or_luma_extra_sources:
         Additional composite or luma ``.tbc`` files for multi-source dropout
         correction.
@@ -180,14 +186,6 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         Additional chroma ``.tbc`` files for multi-source dropout correction
         (for color-under formats).
     :type dropout_chroma_extra_sources: :py:class:`~collections.abc.Sequence`\[:py:class:`str` | :py:class:`~pathlib.Path`] | None
-
-    :param fpsnum:
-        Override frame-rate numerator. When not specified, frame rate is
-        auto-detected from metadata.
-    :type fpsnum: :py:class:`int` | None
-
-    :param int fpsden:
-        Override frame-rate denominator (used with *fpsnum*).
 
     :rtype: :py:class:`~vapoursynth.VideoNode`
 
@@ -258,6 +256,76 @@ uncommon. You will often want to convert it for downstream filters:
 
     # Reducing chroma resolution closer to analog source aids some NR filters:
     workable_clip = clip.resize.Spline36(format=vs.YUV422P16)
+
+
+.. _dropout-annotation-py:
+
+Dropouts: ``create_dropouts_mask`` / ``dropout_spans``
+-------------------------------------------------------
+Correction *hides* dropouts. ``annotate_dropouts=True`` instead reports where
+they are, so another filter can act on them — in-painting the damage with a
+plugin of your choosing rather than borrowing from neighbouring lines, say.
+
+Annotation is independent of correction: annotate alone to hand the damaged
+regions to something else, or alongside ``dropout_correct=True`` to see what was
+concealed. Note the regions describe *detected* damage, so with correction on
+they mark what has already been repaired, not what still needs repairing.
+``dropout_overcorrect=True`` widens what gets reported to the same footprint it
+widens correction to.
+
+Because the regions ride along as frame properties, they survive ``std.Trim``,
+``std.Interleave`` and splicing — the mask stays aligned whether you build it
+before or after editing the decoded clip.
+
+.. autofunction:: vsanalog.create_dropouts_mask
+
+.. autofunction:: vsanalog.dropout_spans
+
+.. autoclass:: vsanalog.DropoutSpan
+
+.. autoclass:: vsanalog.DropoutOrigin
+    :members:
+
+.. code-block:: python
+
+    import vapoursynth as vs
+    import vsanalog
+
+    # Locate the dropouts without concealing them, then repair them elsewhere.
+    clip = vsanalog.decode_4fsc_video(
+        "capture.tbc", dropout_correct=False, annotate_dropouts=True)
+    mask = vsanalog.create_dropouts_mask(clip)
+    repaired = vs.core.std.MaskedMerge(clip, inpainted, mask)
+
+The mask is a full-size single-plane clip matching the decoded clip's precision,
+which is exactly what ``MaskedMerge`` wants — including for SECAM's 4:4:0
+output, where it resamples the mask for the half-height chroma planes itself
+rather than needing a pre-subsampled one. That resampling is bilinear, so a
+one-line dropout softens across two chroma rows; ``std.Binarize`` the result if
+you need the edges kept hard.
+
+Grow the mask to cover the ringing either side of a dropout, or measure damage
+per frame without repairing anything:
+
+.. code-block:: python
+
+    grown = vs.core.std.Maximum(mask).std.Inflate()
+
+    with clip.get_frame(0) as f:
+        spans = vsanalog.dropout_spans(f)
+    damaged_samples = sum(s.x_end - s.x_start for s in spans)
+
+On SECAM, ``dropout_spans`` also reports the FM click concealment the decoder
+performed itself, tagged
+:py:attr:`~vsanalog.DropoutOrigin.DECODER_CONCEALMENT` rather than
+:py:attr:`~vsanalog.DropoutOrigin.SOURCE_METADATA`. Nothing upstream flagged
+those regions — they exist only because the frame was decoded — so masking them
+alone shows exactly which chroma samples were replaced rather than received:
+
+.. code-block:: python
+
+    concealed = vsanalog.create_dropouts_mask(
+        clip, origins=[vsanalog.DropoutOrigin.DECODER_CONCEALMENT])
 
 
 SECAM Chroma: ``resample_secam`` / ``fill_secam_by_delay``

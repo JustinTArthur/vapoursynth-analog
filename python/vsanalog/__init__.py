@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
-import functools
 import platform
-import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version as _get_version
 from pathlib import Path
-from typing import Any, TypeVar
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec
-else:
-    from typing_extensions import ParamSpec
+from typing import Any
 
 import vapoursynth as vs
 
+from .plugin import requires_plugin
+from .dropouts import (
+    DropoutOrigin, DropoutSpan, create_dropouts_mask, dropout_spans,
+)
 from .secam import fill_secam_by_delay, resample_secam
 
 __all__ = [
-    "decode_4fsc_video", "fill_secam_by_delay",
+    "DropoutOrigin", "DropoutSpan", "create_dropouts_mask",
+    "decode_4fsc_video", "dropout_spans", "fill_secam_by_delay",
     "requires_plugin", "resample_secam", "set_log_level",
 ]
 
@@ -29,9 +27,6 @@ try:
 except PackageNotFoundError:
     # Imported straight from a source tree, as the docs build does.
     __version__ = "unknown"
-
-P = ParamSpec("P")
-R = TypeVar("R")
 
 # --- Output / color-science option value sets (validated before pass-through) ---
 _COLOR_FAMILIES = {"yuv", "rgb", "gray"}
@@ -84,36 +79,6 @@ _BANDPASS_DECODERS = {"ldzeug2_luma_sep", "ldzeug2_luma_sep_frame"}
 _NN_PROVIDERS = frozenset({
     "auto", "cpu", "cuda", "gpu", "tensorrt", "trt", "migraphx", "directml", "coreml",
 })
-
-
-def _get_plugin_path() -> Path:
-    """Derive the filesystem path of the bundled vsanalog shared library."""
-    suffix = {"Windows": ".dll", "Darwin": ".dylib"}.get(platform.system(), ".so")
-    _packages_root = Path(__file__).resolve().parent.parent
-    return _packages_root / "vapoursynth" / "plugins" / f"vsanalog{suffix}"
-
-
-def _ensure_plugin_loaded() -> None:
-    """Load the vsanalog VapourSynth plugin if it isn't already available."""
-    if not hasattr(vs.core, "analog"):
-        plugin_path = _get_plugin_path()
-        if not plugin_path.is_file():
-            raise FileNotFoundError(
-                f"vsanalog plugin not found at {plugin_path}. "
-                "Ensure the vsanalog package is properly installed."
-            )
-        vs.core.std.LoadPlugin(plugin_path)
-
-
-def requires_plugin(func: Callable[P, R]) -> Callable[P, R]:
-    """Decorator ensuring the vsanalog VapourSynth plugin is loaded."""
-
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        _ensure_plugin_loaded()
-        return func(*args, **kwargs)
-
-    return wrapper
 
 
 @requires_plugin
@@ -212,10 +177,9 @@ def decode_4fsc_video(
     dropout_correct: bool = False,
     dropout_overcorrect: bool = False,
     dropout_intra: bool = False,
+    annotate_dropouts: bool = False,
     dropout_composite_or_luma_extra_sources: Sequence[str | Path] | None = None,
     dropout_chroma_extra_sources: Sequence[str | Path] | None = None,
-    fpsnum: int | None = None,
-    fpsden: int = 1,
 ) -> vs.VideoNode:
     """Decode 4𝑓𝑠𝑐 (four times subcarrier frequency) digitized analog video.
 
@@ -267,6 +231,13 @@ def decode_4fsc_video(
         window's *topmost* line, which on a 525-line system is a field 2 line
         and so carries the higher number (the standard window is 283..263).
         Defaults to the video system's standard active picture.
+    annotate_dropouts:
+        Record each frame's dropout regions in the ``AnalogDropoutSpans`` frame
+        property, for :func:`dropout_spans` and :func:`create_dropouts_mask`.
+        Independent of ``dropout_correct``: annotate without correcting to hand
+        the damaged regions to another filter, or alongside it to see what was
+        concealed. ``dropout_overcorrect`` widens what gets reported to the
+        footprint correction would touch.
     """
     _validate_choice("color_family", color_family, _COLOR_FAMILIES)
     _validate_choice("chroma_filter", chroma_filter, _CHROMA_FILTERS)
@@ -368,9 +339,6 @@ def decode_4fsc_video(
         )
     if dropout_chroma_extra_sources is not None:
         kwargs["dropout_chroma_extra_sources"] = dropout_chroma_extra_sources
-    if fpsnum is not None:
-        kwargs["fpsnum"] = fpsnum
-        kwargs["fpsden"] = fpsden
 
     # VapourSynth's Python bindings coerce bool→int and Path→str automatically.
     return vs.core.analog.decode_4fsc_video(
@@ -384,5 +352,6 @@ def decode_4fsc_video(
         dropout_correct=dropout_correct,
         dropout_overcorrect=dropout_overcorrect,
         dropout_intra=dropout_intra,
+        annotate_dropouts=annotate_dropouts,
         **kwargs,
     )

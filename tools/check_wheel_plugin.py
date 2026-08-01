@@ -17,7 +17,7 @@ import sys
 
 import vapoursynth as vs
 
-EXPECTED_FUNCTIONS = ("decode_4fsc_video", "set_log_level")
+EXPECTED_FUNCTIONS = ("create_dropouts_mask", "decode_4fsc_video", "set_log_level")
 
 
 def main() -> None:
@@ -32,9 +32,9 @@ def main() -> None:
     if missing:
         sys.exit(f"plugin autoloaded but is missing: {', '.join(missing)}")
 
-    import vsanalog
+    from vsanalog import plugin
 
-    vsanalog._ensure_plugin_loaded()
+    plugin._ensure_plugin_loaded()
 
     print(
         "installed wheel's plugin autoloaded; analog namespace provides "

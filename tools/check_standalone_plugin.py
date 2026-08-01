@@ -16,7 +16,7 @@ from pathlib import Path
 import vapoursynth as vs
 
 PLUGIN_NAMES = ("vsanalog.so", "vsanalog.dylib", "vsanalog.dll")
-EXPECTED_FUNCTIONS = ("decode_4fsc_video", "set_log_level")
+EXPECTED_FUNCTIONS = ("create_dropouts_mask", "decode_4fsc_video", "set_log_level")
 
 
 def find_plugin(target: Path) -> Path:

@@ -107,7 +107,7 @@ library extracted from ld-chroma-decoder. It's pulled in as a Meson git wrap
 and linked statically, along with the trimmed SQLite it bundles, so this plugin
 has no Qt or system-SQLite dependency at all. libchromadec supplies the composite
 separation/transformation decoders (NTSC/PAL/SECAM/mono), the CVBS and TBC
-readers, dropout correction, and the neural-network decoders.
+readers, dropout masks and corrections, and the neural-network decoders.
 
 To ease legal distribution, this project is available under the GPL 3 license
 (or a compatible one), matching libchromadec.

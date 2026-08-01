@@ -16,11 +16,12 @@ def test_plugin_autoloads():
 
 
 def test_wrapper_loads_plugin():
-    vsanalog = pytest.importorskip("vsanalog")
+    pytest.importorskip("vsanalog")
+    plugin = pytest.importorskip("vsanalog.plugin")
     # The decorator loads the plugin on first call; a bad path still reaches the
     # plugin (which raises), proving the plugin is present and callable.
     try:
-        vsanalog._ensure_plugin_loaded()
+        plugin._ensure_plugin_loaded()
     except FileNotFoundError:
         pytest.skip("vsanalog plugin binary not installed in this environment")
     assert hasattr(vs.core, "analog")

@@ -284,6 +284,8 @@ void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
     }
 
     dropoutCorrect = opts->dropoutCorrect;
+    dropoutOvercorrect = opts->dropoutOvercorrect;
+    annotateDropouts = opts->annotateDropouts;
     if (dropoutCorrect) {
         src->setDropout(true, opts->dropoutOvercorrect, opts->dropoutIntra);
     }
@@ -345,6 +347,13 @@ void VSAnalog4fscSource::GetFrame(int frameNumber, float *const *planeData,
                 extra.dropoutFailed = st.failed;
                 extra.dropoutTotalDistance = st.total_distance;
             }
+        }
+
+        // After the decode, so the SECAM click concealment this frame performed
+        // is reported alongside the dropouts flagged in the source metadata.
+        if (annotateDropouts) {
+            src->dropoutSpans(frameNumber, dropoutOvercorrect, extra.dropoutSpans);
+            extra.hasDropoutSpans = true;
         }
 
         if (isSecam) {

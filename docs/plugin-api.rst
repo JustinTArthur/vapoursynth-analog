@@ -34,8 +34,7 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         [, dropout_intra=0] \
         [, dropout_composite_or_luma_extra_sources] \
         [, dropout_chroma_extra_sources] \
-        [, fpsnum] \
-        [, fpsden=1])
+        [, annotate_dropouts=0])
 
     Decodes 4𝑓𝑠𝑐 (four times subcarrier frequency) sampled analog video signals
     to a digital video clip. The signal data must be orthogonal video system
@@ -159,16 +158,15 @@ It can be called directly from VapourSynth scripts without the Python wrapper.
         Additional composite or luma ``.tbc`` files for multi-source dropout
         correction.
 
+    :param int annotate_dropouts:
+        Set to 1 to record each frame's dropout regions in the
+        ``AnalogDropoutSpans`` frame property, for use with
+        :ref:`create_dropouts_mask <create-dropouts-mask>`. Independent of
+        ``dropout_correct``. See :ref:`dropout-annotation` below. Default ``0``.
+
     :param str[] dropout_chroma_extra_sources:
         Additional chroma ``.tbc`` files for multi-source dropout correction
         (for color-under formats).
-
-    :param int fpsnum:
-        Override frame rate numerator. When not specified, frame rate is
-        auto-detected from metadata.
-
-    :param int fpsden:
-        Override frame rate denominator (used with ``fpsnum``). Default ``1``.
 
 
 Usage
@@ -377,6 +375,39 @@ each output frame:
       - Sum of line distances for all replacements
 
 
+.. _dropout-annotation:
+
+Dropout Annotation
+^^^^^^^^^^^^^^^^^^
+Concealment *hides* dropouts; ``annotate_dropouts=1`` instead reports where they
+are, in the ``AnalogDropoutSpans`` frame property, so another filter can act on
+them. It is independent of ``dropout_correct``: annotate without correcting to
+hand the damaged regions to an in-painter, or alongside it to see what was
+concealed. Note that the regions describe *detected* damage — with
+``dropout_correct=1`` they mark what has already been repaired, not what still
+needs repairing.
+
+The property is a flat integer array holding four values per region —
+``y``, ``x_start``, ``x_end``, ``origin`` — in the decoded clip's own pixel
+coordinates, with ``x`` half-open and regions sorted by ``y`` then ``x_start``.
+One array rather than four parallel ones keeps its length off 1, which
+VapourSynth's Python layer would hand back as a bare int instead of a list. The
+property is present but empty on a frame with no dropouts, which is what
+distinguishes an annotated clip from an unannotated one.
+
+``origin`` is ``0`` for a region flagged upstream by ld-decode / vhs-decode and
+stored in the sidecar, or ``8`` for one the decoder detected and concealed
+itself — currently SECAM FM click concealment, which exists only because the
+frame was decoded, and so has no counterpart in the sidecar.
+
+``dropout_overcorrect=1`` widens the reported regions to the footprint
+overcorrect-mode correction would touch, exactly as it widens what correction
+overwrites. The widening happens against the full signal line before the active
+crop is applied, so a dropout lying entirely in the blanking either side of the
+picture can extend into the frame under ``dropout_overcorrect=1`` while being
+absent altogether without it.
+
+
 Metadata Sidecars
 ^^^^^^^^^^^^^^^^^
 Each source signal file must have a corresponding metadata sidecar file with
@@ -384,6 +415,56 @@ the same base name. For ``.tbc`` sources that is a ``.db`` (SQLite) or
 ``.json`` file, ``.db`` taking precedence when both are present; CVBS sources
 carry a ``.meta`` sidecar. Both TBC forms are read directly and neither is
 converted or written back — no ``.db`` is created alongside a ``.json`` source.
+
+
+.. _create-dropouts-mask:
+
+``analog.create_dropouts_mask``
+-------------------------------
+
+.. function:: core.analog.create_dropouts_mask(clip[, origins])
+
+    Rasterises a clip's annotated dropout regions into a mask clip.
+
+    ``clip`` must have been decoded with ``annotate_dropouts=1``; a clip without
+    the ``AnalogDropoutSpans`` property is an error. The result is a
+    single-plane clip matching ``clip``'s dimensions and precision — ``0`` for
+    clean samples, full scale (``1.0``, or ``2**bits - 1``) for dropped ones —
+    which drops straight into ``core.std.MaskedMerge`` and the other ``std``
+    mask functions.
+
+    The mask is full-size even for subsampled clips, which is what
+    ``MaskedMerge`` requires: it resamples the mask for the chroma planes
+    itself, honouring the clip's ``_ChromaLocation``. For SECAM's 4:4:0 output
+    that resampling is bilinear, so a one-line dropout softens across two chroma
+    rows.
+
+    Because the regions travel as frame properties, they survive ``std.Trim``,
+    ``std.Interleave`` and splicing — build the mask before or after editing the
+    decoded clip and it stays aligned either way.
+
+    :param vnode clip:
+        An annotated clip, 8-16 bit integer or 32-bit float.
+
+    :param int[] origins:
+        Restrict the mask to regions of particular origin: ``0`` for regions
+        flagged in the source metadata, ``8`` for decoder concealment. Defaults
+        to every origin. Masking ``origins=[8]`` alone shows exactly which
+        chroma samples SECAM click concealment replaced.
+
+.. code-block:: python
+
+    import vapoursynth as vs
+    core = vs.core
+
+    # Locate the dropouts without concealing them, then repair them elsewhere.
+    clip = core.analog.decode_4fsc_video(
+        "capture.tbc", dropout_correct=0, annotate_dropouts=1)
+    mask = core.analog.create_dropouts_mask(clip)
+    repaired = core.std.MaskedMerge(clip, inpainted, mask)
+
+    # Grow the mask a little to cover the ringing at a dropout's edges.
+    grown = core.std.Maximum(mask).std.Inflate()
 
 
 ``analog.set_log_level``
