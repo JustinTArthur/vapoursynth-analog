@@ -22,6 +22,35 @@ Changelog
   from the previous line of the same field, as a receiver's delay line does,
   interpolating nothing. Both want woven frames — they split the fields
   themselves — so run them before deinterlacing.
+- Added ``modernize_chromaticity`` (plugin and Python wrapper), converting
+  analog-era colorimetry and photometry to modern targets (BT.709, sRGB,
+  BT.2100 PQ/HLG, BT.2020 SDR, DCI/D65 P3, XYZ) with BT.1886 Annex 1/Appendix 1 display modelling, optional Bradford chromatic
+  adaptation, and ``resize``-style parameter names whose ``*_in`` values
+  override frame properties. Color only: no geometry conversion and no
+  dithering. Subsampled Y'CbCr input is converted through an internal
+  ``resize`` round trip (``resample_filter_uv``, bicubic by default) and
+  keeps its subsampling on Y'CbCr output; 4:4:0 SECAM is instead routed
+  through ``resample_secam`` / ``fill_secam_by_delay``. Constant-luminance
+  output covers both ``2020cl`` (H.273 matrix 10) and ``chromacl``
+  (matrix 13, luma weights derived from the output primaries), each free to
+  pair with any output transfer: H.273 Equations E-62 to E-65 define the
+  color-difference normalizers as the transfer characteristic function
+  applied to expressions in K\ :sub:`B`/K\ :sub:`R`, so the curve is an
+  independent axis rather than something the matrix fixes.
+- Added ``amplify_chroma`` (plugin and Python wrapper), a post-decode
+  counterpart to ``chroma_gain``: a saturation control in the analog video
+  domain, scaling E'Cb/E'Cr rather than an HSV/HLS saturation axis. Frames
+  that already carry those color differences — 32-bit float Y'CbCr tagged
+  ``_Matrix=4``, ``5`` or ``6``, as ``decode_4fsc_video`` emits — are scaled
+  in place, and the same color differences in an integer format go through a
+  float intermediate that names no matrix, so nothing is resampled and even
+  4:4:0 SECAM survives. Frames on other axes are instead converted through a
+  ``_Matrix=6`` intermediate of the same subsampling and back, per frame, so
+  previously captured video from a source plugin works too; that conversion
+  holds the analog luma constant the way a decoder's gain does, leaving the
+  frame's own Y' to be re-derived, and 4:4:0 is refused rather than blended.
+  Only analog-era ``_Primaries`` (4, 5, 6, 7, or none) are accepted, so it
+  belongs upstream of ``modernize_chromaticity``.
 - Added neural-network composite decoders — ``nntransform3d``,
   ``ldzeug2_color_cnn``, ``ldzeug2_luma_sep`` and ``ldzeug2_luma_sep_frame`` —
   with bundled models, ``onnx_provider`` execution-provider selection, and

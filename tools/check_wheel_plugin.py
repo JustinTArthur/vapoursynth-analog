@@ -17,7 +17,10 @@ import sys
 
 import vapoursynth as vs
 
-EXPECTED_FUNCTIONS = ("create_dropouts_mask", "decode_4fsc_video", "set_log_level")
+EXPECTED_FUNCTIONS = (
+    "amplify_chroma", "create_dropouts_mask", "decode_4fsc_video",
+    "modernize_chromaticity", "set_log_level",
+)
 
 
 def main() -> None:

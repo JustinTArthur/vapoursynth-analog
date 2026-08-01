@@ -6,8 +6,10 @@
  ******************************************************************************/
 
 #include "version.h"
+#include "amplifychroma.h"
 #include "analog4fsc.h"
 #include "chdlog.h"
+#include "modernizechromaticity.h"
 
 #include <algorithm>
 #include <cctype>
@@ -677,6 +679,44 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "origins:int[]:opt;",
         "clip:vnode;",
         CreateDropoutsMask,
+        nullptr,
+        plugin
+    );
+
+    vspapi->registerFunction(
+        "modernize_chromaticity",
+        "clip:vnode;"
+        "primaries_in_s:data:opt;"
+        "transfer_in_s:data:opt;"
+        "matrix_in_s:data:opt;"
+        "primaries_s:data:opt;"
+        "transfer_s:data:opt;"
+        "matrix_s:data:opt;"
+        "output_preset:data:opt;"
+        "resample_filter_uv:data:opt;"
+        "filter_param_a_uv:float:opt;"
+        "filter_param_b_uv:float:opt;"
+        "chromatic_adaptation:int:opt;"
+        "nominal_luminance:float:opt;"
+        "contrast_in:float:opt;"
+        "brightness_in:float:opt;"
+        "contrast:float:opt;"
+        "brightness:float:opt;",
+        "clip:vnode;",
+        CreateModernizeChromaticity,
+        nullptr,
+        plugin
+    );
+
+    vspapi->registerFunction(
+        "amplify_chroma",
+        "clip:vnode;"
+        "gain:float;"
+        "resample_filter_uv:data:opt;"
+        "filter_param_a_uv:float:opt;"
+        "filter_param_b_uv:float:opt;",
+        "clip:vnode;",
+        CreateAmplifyChroma,
         nullptr,
         plugin
     );

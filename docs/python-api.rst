@@ -4,9 +4,8 @@ The ``vsanalog`` Python package provides a high-level, type-hinted interface to
 the vsanalog VapourSynth plugin. It handles plugin loading automatically and
 accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
 
-``vsanalog.decode_4fsc_video``
-------------------------------
-
+Decoding
+--------
 .. py:function:: vsanalog.decode_4fsc_video(\
         composite_or_luma_source, \
         chroma_or_pb_source=None, \
@@ -187,7 +186,7 @@ accepts Python-native types like :py:class:`~pathlib.Path` and :py:class:`bool`.
         (for color-under formats).
     :type dropout_chroma_extra_sources: :py:class:`~collections.abc.Sequence`\[:py:class:`str` | :py:class:`~pathlib.Path`] | None
 
-    :rtype: :py:class:`~vapoursynth.VideoNode`
+    :rtype: :py:class:`VideoNode`
 
 Usage Examples
 ~~~~~~~~~~~~~~
@@ -260,8 +259,8 @@ uncommon. You will often want to convert it for downstream filters:
 
 .. _dropout-annotation-py:
 
-Dropouts: ``create_dropouts_mask`` / ``dropout_spans``
--------------------------------------------------------
+Dropouts
+--------
 Correction *hides* dropouts. ``annotate_dropouts=True`` instead reports where
 they are, so another filter can act on them — in-painting the damage with a
 plugin of your choosing rather than borrowing from neighbouring lines, say.
@@ -328,8 +327,307 @@ alone shows exactly which chroma samples were replaced rather than received:
         clip, origins=[vsanalog.DropoutOrigin.DECODER_CONCEALMENT])
 
 
-SECAM Chroma: ``resample_secam`` / ``fill_secam_by_delay``
-----------------------------------------------------------
+Colorimetry
+-----------
+Analog-era color often lives in chromaticities and transfer characteristics
+that modern playback systems don't speak natively, and at whatever strength the
+decoder gave it. ``modernize_chromaticity`` converts the colorimetry and
+``amplify_chroma`` adjusts the strength, both on any clip rather than only a
+fresh decode: a conventional capture loaded through a source plugin such as
+BestSource is as valid an input as either.
+
+``modernize_chromaticity`` converts to a modern target (BT.709, sRGB,
+BT.2100 PQ/HLG, BT.2020 SDR) in one color-managed step. It performs no
+geometry conversions and no dithering, so feed it high bit depth (e.g. the
+32-bit float ``decode_4fsc_video`` produces) and dither at the end of your
+pipeline. Subsampled Y'CbCr input is fine: chroma is upsampled through the
+:external+vapoursynth:doc:`resize <functions/video/resize>` plugin for the
+conversion (``resample_filter_uv``) and returned to
+the source's subsampling on output.
+
+Unlike the ``resize`` functions whose parameter names it borrows, the
+``*_in`` parameters *override* frame properties; anything not given is
+inferred from the clip's ``_Primaries``/``_Transfer``/``_Matrix`` properties,
+and the filter errors when neither source is available. This is because the
+IEC/ITU code points used by those properties don't always map to analog specs.
+
+.. py:function:: vsanalog.modernize_chromaticity(clip, \
+        *, \
+        primaries_in_s=None, \
+        transfer_in_s=None, \
+        matrix_in_s=None, \
+        primaries_s=None, \
+        transfer_s=None, \
+        matrix_s=None, \
+        output_preset=None, \
+        resample_filter_uv=None, \
+        filter_param_a_uv=None, \
+        filter_param_b_uv=None, \
+        chromatic_adaptation=False, \
+        nominal_luminance=None, \
+        contrast_in=None, \
+        brightness_in=None, \
+        contrast=None, \
+        brightness=None)
+
+    Convert analog-era colorimetry and photometry to a modern target.
+
+    :param clip:
+        Input clip: YUV or RGB, constant format, integer up to 16 bits or
+        32-bit float.
+    :type clip: :py:class:`VideoNode`
+
+    :param str primaries_in_s:
+        Input chromaticity. Broadcast systems: ``"ntsc-1953"``
+        (``"bt470m"``/``"470m"``/``"fcc"``), ``"bt470-japan"``
+        (``"470m93"``/``"ntscj"``), ``"bt1700-japan"`` (``"170j"``), ``"pal"``
+        (``"ebu"``/``"bbc"``/``"470bg"``), ``"smpte-c"``
+        (``"st170"``/``"170m"``), ``"studio-japan"``, ``"nederland-proposal"``,
+        ``"code-point-22"`` (the mystery H.273 chromaticity). CRT phosphor
+        sets: ``"ecia-xxa"`` (``"p22"``) through ``"ecia-xxg"``,
+        ``"rca-sulfide-8500k"``, ``"rca-sulfide-9300k-27mpcd"``,
+        ``"rca-sulfide-c"``, ``"rca-p22-4-67"``, ``"rca-p22-5-61"``,
+        ``"rca-p22-9-65"``, ``"sony-p22"``. Japanese entries use ITU-R
+        BT.2035's reference D93 white point. Inferred from ``_Primaries`` when
+        omitted.
+
+    :param str transfer_in_s:
+        Input transfer characteristics: ``"linear"``, ``"ntsc-1953"``
+        (``"bt470m"``/``"470m"``/``"fcc"``/``"gamma22"``), ``"bt470bg"``
+        (``"470bg"``/``"tube"``/``"gamma28"``), ``"st170-scene"``
+        (``"st170-oetf"``/``"bt601"``/``"601"``), ``"st170-display"``
+        (``"st170-eotf"``), ``"bt1886-annex-1"``
+        (``"1886"``/``"lcd"``/``"gamma24"``), ``"bt1886-appendix-1"``
+        (``"1886a"``/``"crt"``), or ``"srgb"`` (``"iec-61966-2-1"``). Inferred
+        from ``_Transfer`` when omitted.
+
+    :param str matrix_in_s:
+        Input Y'CbCr matrix: ``"analog-classic"`` (``"ntsc-1953"``/``"fcc"``,
+        the 0.30/0.11 luma weights) or ``"analog-modern"``
+        (``"bt470"``/``"bt1700"``/``"st170"``/``"170m"``/``"bt601"``/``"601"``,
+        the 0.299/0.114 weights). Not applicable to RGB input. Inferred from
+        ``_Matrix`` when omitted.
+
+    :param str primaries_s:
+        Output chromaticity: ``"bt709"`` (``"709"``), ``"bt2020"``
+        (``"2020"``), ``"p3dci"`` (``"st431-2"``), ``"p3d65"``
+        (``"st432-1"``), or ``"xyz"`` (``"st428"``; requires
+        ``matrix_s="rgb"``).
+
+    :param str transfer_s:
+        Output transfer characteristics: ``"linear"``, ``"bt1886-annex-1"``
+        (``"1886"``/``"lcd"``/``"gamma24"``; tagged as BT.709, or as the
+        BT.2020 10/12-bit tag when paired with BT.2020 primaries), ``"srgb"``
+        (``"iec-61966-2-1"``), ``"pq"`` (``"st2084"``/``"2084"``), or
+        ``"hlg"`` (``"std-b67"``).
+
+    :param str matrix_s:
+        Output matrix: ``"rgb"`` (produces an RGB clip), ``"bt709"``
+        (``"709"``), ``"bt2020ncl"``
+        (``"bt2100"``/``"2020ncl"``/``"2020"``/``"2100"``), ``"2020cl"``
+        (BT.2020 constant luminance), or ``"chromacl"``
+        (``"chromaticity-derived-cl"``; constant luminance with the luma
+        weights derived from *primaries_s*, so it pairs with any output
+        chromaticity). Required for YUV output unless *output_preset* supplies
+        it; RGB input defaults to RGB output.
+
+        Constant luminance is not a transfer characteristic: it applies the
+        matrix to the linear tristimulus and the transfer curve *after* it,
+        rather than before, so luminance survives chroma subsampling. Its
+        color-difference normalizers are derived from whichever *transfer_s*
+        is in play, so the two are independent; naming no transfer falls back
+        to the BT.2020 OETF, the pairing BT.2020's own table tabulates.
+
+    :param str output_preset:
+        Convenience bundle: ``"hdtv"``/``"bt709"`` (BT.709 primaries, BT.1886
+        transfer, BT.709 matrix), ``"uhdtv"``/``"bt2100-pq"`` (BT.2020
+        primaries, PQ, BT.2020 NCL matrix), ``"bt2100-hlg"`` (BT.2020
+        primaries, HLG, BT.2020 NCL matrix), ``"bt2020-sdr"``
+        (BT.2020 primaries, BT.1886, BT.2020 NCL matrix), or
+        ``"srgb"``/``"iec-61966-2-1"`` (BT.709 primaries, sRGB transfer, RGB
+        output — the standard defines no matrix, so add *matrix_s* for
+        Y'CbCr). Explicit *primaries_s*/*transfer_s*/*matrix_s* override
+        preset members; ``matrix_s="rgb"`` keeps the preset's colorimetry but
+        yields RGB.
+
+    :param str resample_filter_uv:
+        Kernel for the internal chroma round trip on subsampled input, by the
+        same names :py:func:`vsanalog.resample_secam` accepts: ``"point"``,
+        ``"bilinear"``, ``"bicubic"`` (default), ``"spline16"``,
+        ``"spline36"``, ``"spline64"``, or ``"lanczos"``. The upsample sites
+        against the frame's ``_ChromaLocation``, and Y'CbCr output is returned
+        to the input subsampling with the same kernel. Unused for 4:4:4 and
+        RGB input. 4:4:0 input is rejected: SECAM from
+        :py:func:`vsanalog.decode_4fsc_video` carries a line-sequential Db/Dr
+        lattice that plain resampling would blend — realign it with
+        :py:func:`vsanalog.resample_secam`, or
+        :py:func:`vsanalog.fill_secam_by_delay` for the classic delay-line
+        treatment.
+
+    :param float filter_param_a_uv:
+    :param float filter_param_b_uv:
+        Kernel tuning for *resample_filter_uv*, as in the
+        :external+vapoursynth:doc:`resize <functions/video/resize>`
+        functions: the bicubic b/c coefficients, or the lanczos tap count
+        (*filter_param_a_uv* only).
+
+    :param bool chromatic_adaptation:
+        Apply a Bradford chromatic adaptation between the input and output
+        white points. Off by default (matching ``resize`` behaviour): whites
+        keep their original tint, e.g. a D93-mastered picture stays cool on a
+        D65 display. Beware that off, extremes can clip unintentionally in SDR
+        output: full-strength white under a non-D65 input white lands outside
+        the output's unit RGB range (NTSC-1953's Illuminant C white overshoots
+        BT.709's red and blue by roughly 5-10% linear), clamping in integer
+        output and deferring the clip downstream in float. PQ and HLG have
+        headroom above SDR reference white and are unaffected. Enable
+        adaptation — or attenuate first — when unclipped SDR highlights
+        matter.
+
+    :param float nominal_luminance:
+        Physical luminance in cd/m² that linear 1.0 (SDR reference white) maps
+        to for PQ and HLG output. Defaults to 100.
+
+    :param float contrast_in:
+    :param float brightness_in:
+        Input-side BT.1886 user controls as 0.0-1.0 fractions of reference
+        white: *contrast_in* is the screen white luminance L\ :sub:`W` (Annex
+        1 user gain; also normalizes Appendix 1) and *brightness_in* the black
+        lift (Annex 1 L\ :sub:`B`, Appendix 1 ``b``). Defaults 1.0 and 0.0.
+        Only valid with the ``bt1886-annex-1``/``bt1886-appendix-1`` input
+        transfers.
+
+    :param float contrast:
+    :param float brightness:
+        Output-side counterparts; only valid with the ``bt1886-annex-1``
+        output transfer.
+
+    :rtype: :py:class:`VideoNode`
+
+    Output range follows the output matrix's convention (studio range for
+    Y'CbCr, full range for RGB); input range is read from the ``_ColorRange``
+    frame property with the same convention as the fallback.
+
+.. code-block:: python
+
+    import vapoursynth as vs
+    from vapoursynth import core
+
+    import vsanalog
+
+    clip = vsanalog.decode_4fsc_video("capture.tbc")
+
+    # The decoded clip carries assumed colorimetry in frame properties.
+    # When correct, a preset might be all that's needed:
+    hd = vsanalog.modernize_chromaticity(clip, output_preset="hdtv")
+
+    # Or override what the properties can't convey:
+    hdr = vsanalog.modernize_chromaticity(
+        clip,
+        primaries_in_s="studio-japan",
+        transfer_in_s="crt",
+        output_preset="bt2100-pq",
+    )
+    # Take to a delivery format after filtering the modernized clip:
+    hdr10 = core.resize.Spline36(
+        hdr,
+        format=vs.YUV420P10,
+        dither_type="error_diffusion"
+    )
+
+    # Conventional capture? Serve from a conventional source plugin but raise
+    # bit depth so we can dither when returning to lower bit depth.
+    src = core.bs.VideoSource("capture.mkv")
+    edit_fmt = src.format.replace(bits_per_sample=16)
+    editable = src.resize.Point(format=edit_fmt)
+    wide_gamut_sdr = vsanalog.modernize_chromaticity(
+        editable,
+        output_preset="bt2020-sdr"
+    )
+    output = wide_gamut_sdr.resize.Spline36(
+        format=src.format,
+        dither_type="random"
+    )
+    # Re-tag for lower bit-depth (BT.2020-specific):
+    output = output.std.SetFrameProps(_Transfer=vs.TRANSFER_BT2020_10)
+
+.. py:function:: vsanalog.amplify_chroma(clip, gain, \
+        *, \
+        resample_filter_uv=None, \
+        filter_param_a_uv=None, \
+        filter_param_b_uv=None)
+
+    Amplify or attenuate the color-difference signals: a post-decode
+    counterpart of :py:func:`vsanalog.decode_4fsc_video`'s *chroma_gain*, which
+    scales the demodulated color differences on their way out of the decoder.
+
+    A saturation control, but saturation in analog video domain terms (a gain
+    on E'Cb/E'Cr rather than the saturation axis of an HSV or HLS model).
+    Frames with analog-style color difference planes are scaled in place; the
+    rest are converted through a ``_Matrix=6`` intermediate and back.
+    Colorimetry from outside the analog era is rejected, so this belongs
+    upstream of :py:func:`vsanalog.modernize_chromaticity` rather than after
+    it.
+
+    :param clip:
+        Input clip: YUV or RGB, constant format. GRAY carries no chroma and is
+        rejected.
+    :type clip: :py:class:`VideoNode`
+
+    :param float gain:
+        Multiplier applied to both color differences. Above ``1.0``
+        amplifies and below ``1.0`` attenuates; ``0.0`` leaves a monochrome
+        picture, and ``1.0`` hands the clip straight back without the
+        conversion round trip a unity gain could only lose precision to. Must
+        be ``0.0`` or greater.
+
+    :param str resample_filter_uv:
+        Kernel for the chroma resampling a matrix change entails, by the same
+        names :py:func:`vsanalog.resample_secam` accepts: ``"point"``,
+        ``"bilinear"``, ``"bicubic"`` (default), ``"spline16"``,
+        ``"spline36"``, ``"spline64"``, or ``"lanczos"``. Only subsampled
+        frames on non-analog axes use it — the matrix change happens at 4:4:4
+        and is resampled back to the source subsampling, sited against the
+        frame's ``_ChromaLocation``. Frames already carrying analog color
+        differences never reach it, in any format or subsampling.
+
+        4:4:0 frames needing that matrix change are refused rather than
+        resampled: SECAM from :py:func:`vsanalog.decode_4fsc_video` carries a
+        line-sequential Db/Dr lattice that plain resampling would blend, so
+        realign it with :py:func:`vsanalog.resample_secam` (or
+        :py:func:`vsanalog.fill_secam_by_delay`) first. Analog-matrix 4:4:0 is
+        amplified normally, integer included, and needs no realignment.
+
+    :param float filter_param_a_uv:
+    :param float filter_param_b_uv:
+        Kernel tuning for *resample_filter_uv*, as in the
+        :external+vapoursynth:doc:`resize <functions/video/resize>`
+        functions: the bicubic b/c coefficients, or the lanczos tap count
+        (*filter_param_a_uv* only).
+
+    :rtype: :py:class:`VideoNode`
+
+.. code-block:: python
+
+    import vsanalog
+
+    clip = vsanalog.decode_4fsc_video("capture.tbc")
+
+    # A washed-out capture, given back some color before anything else
+    # touches it:
+    livelier = vsanalog.amplify_chroma(clip, 1.2)
+    hd = vsanalog.modernize_chromaticity(livelier, output_preset="hdtv")
+
+    # SECAM's 4:4:0 needs no realignment for a per-sample gain, so this is
+    # safe before resample_secam:
+    secam = vsanalog.decode_4fsc_video("secam.tbc", "secam_chroma.tbc",
+                                       decoder="secam")
+    calmer = vsanalog.resample_secam(vsanalog.amplify_chroma(secam, 0.85),
+                                     format=vs.YUV444PS)
+
+
+SECAM Chroma
+------------
 SECAM carries one color-difference component per line, so a SECAM decode comes
 out as ``YUV440PS`` (4:4:0) with each chroma plane holding only the lines its
 component was really decoded from. Because the second field of a 625-line frame
@@ -373,10 +671,8 @@ it vertically.
     progressive = QTempGaussMC(resampled.resize.Point(format=vs.YUV444P16)).deinterlace()
 
 
-Utility: ``requires_plugin``
-----------------------------
+Utility
+-------
 .. autofunction:: vsanalog.requires_plugin
 
-Utility: ``set_log_level``
---------------------------
 .. autofunction:: vsanalog.set_log_level

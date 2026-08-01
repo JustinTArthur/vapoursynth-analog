@@ -1,6 +1,7 @@
 py.install_sources(
     '__init__.py',
     'plugin.py',
+    'colorimetry.py',
     'dropouts.py',
     'secam.py',
     'py.typed',

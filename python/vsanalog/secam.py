@@ -154,7 +154,7 @@ def resample_secam(
     """Resample a SECAM 4:4:0 clip, realigning its line-sequential chroma.
 
     Behaves like ``core.resize.<Filter>``: ``filter`` picks the kernel by name
-    (as ``resize.Bob`` does) and every other keyword is forwarded to it, so
+    (as :py:func:`resize.Bob` does) and every other keyword is forwarded to it, so
     ``format``, ``matrix``, ``range``, ``dither_type`` and friends work as
     usual. Clips that aren't SECAM 4:4:0 are handed straight to that resize.
 
@@ -295,8 +295,8 @@ def _delay_line(gray: vs.VideoNode) -> vs.VideoNode:
 def fill_secam_by_delay(clip: vs.VideoNode) -> vs.VideoNode:
     """Fill line-sequential chroma the way a SECAM receiver's delay line does.
 
-    Takes the 4:4:0 ``decode_4fsc_video`` emits (or the 4:2:0 a horizontal
-    subsample of it yields) and returns 4:4:4 (or 4:2:2): every row keeps the
+    Take the 4:4:0 video ``decode_4fsc_video`` emits (or the 4:2:0 a horizontal
+    subsample of it yields) and return 4:4:4 (or 4:2:2): every row keeps the
     color difference its own line carried and borrows the other from the
     line before it, which is what the 64 µs delay line in a receiver supplies.
     Nothing is interpolated — each output sample is a decoded one, copied.
@@ -305,7 +305,7 @@ def fill_secam_by_delay(clip: vs.VideoNode) -> vs.VideoNode:
     borrowed component is a line stale, so chroma resolves at half the line
     rate and a color edge lands one line late. :func:`resample_secam`
     resamples the lattice instead, which is truer to the samples but not to
-    what a set would have shown.
+    what a receiver would have shown.
 
     "The line before" means the previous line of the same field, since that
     is the one the delay line held. The first line of each field has no

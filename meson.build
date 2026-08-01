@@ -75,9 +75,12 @@ chromadec_dep = dependency('chromadec', default_options: chromadec_opts)
 
 vsanalog_sources = files(
     'src/plugin.cpp',
+    'src/amplifychroma.cpp',
     'src/analog4fsc.cpp',
     'src/chdlog.cpp',
     'src/chromadecsource.cpp',
+    'src/modernizechromaticity.cpp',
+    'src/resizeuv.cpp',
 )
 
 # The numeric components the plugin registration needs, taken off the front of

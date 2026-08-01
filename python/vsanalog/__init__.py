@@ -11,15 +11,17 @@ from typing import Any
 import vapoursynth as vs
 
 from .plugin import requires_plugin
+from .colorimetry import amplify_chroma, modernize_chromaticity
 from .dropouts import (
     DropoutOrigin, DropoutSpan, create_dropouts_mask, dropout_spans,
 )
 from .secam import fill_secam_by_delay, resample_secam
 
 __all__ = [
-    "DropoutOrigin", "DropoutSpan", "create_dropouts_mask",
+    "DropoutOrigin", "DropoutSpan", "amplify_chroma", "create_dropouts_mask",
     "decode_4fsc_video", "dropout_spans", "fill_secam_by_delay",
-    "requires_plugin", "resample_secam", "set_log_level",
+    "modernize_chromaticity", "requires_plugin", "resample_secam",
+    "set_log_level",
 ]
 
 try:
@@ -88,9 +90,17 @@ def set_log_level(level: str) -> None:
     Decoding diagnostics — an accelerated neural-network backend falling back
     to CPU, a SECAM field ident that disagrees with the sidecar, a capture that
     isn't at a 4𝑓𝑠𝑐 sample rate — are reported as VapourSynth log messages, so
-    ``core.add_log_handler`` receives them alongside everything else. Failures
+    :py:meth:`core.add_log_handler <Core.add_log_handler>` receives them
+    alongside everything else. Failures
     are not: those raise. ``level`` is one of ``debug``, ``info`` (the
     default), ``warning``, ``critical`` or ``off``, and applies process-wide.
+
+    Outside a host that installs its own log handler (``vspipe`` and the
+    like), VapourSynth's Python module forwards these to the standard
+    library's ``logging`` module under the logger name ``"vapoursynth"``. If
+    nothing has called ``logging.basicConfig()`` or otherwise attached a
+    handler, only ``warning`` and above reach stderr; ``debug``/``info`` are
+    silently discarded.
     """
     vs.core.analog.set_log_level(level=level)
 
@@ -190,54 +200,6 @@ def decode_4fsc_video(
     The source format is detected from the file extension. RAW CVBS encodings
     (unscaled ADC captures) are not supported and are rejected.
 
-    Parameters
-    ----------
-    decoder:
-        Decode algorithm. Analytical: ``"ntsc1d"``, ``"ntsc2d"``, ``"ntsc3d"``,
-        ``"ntsc3dnoadapt"``, ``"pal2d"``, ``"transform2d"``, ``"transform3d"``,
-        ``"secam"``, ``"mono"``. Neural (NTSC only): ``"nntransform3d"``,
-        ``"ldzeug2_color_cnn"``, ``"ldzeug2_luma_sep"``,
-        ``"ldzeug2_luma_sep_frame"``. Omit for automatic selection.
-    color_family:
-        Output family: ``"yuv"`` (default; YUV444PS, or YUV440PS for SECAM),
-        ``"rgb"`` (RGBS; not available for SECAM), or ``"gray"`` (GRAYS luma).
-    chroma_filter:
-        Chroma bandpass/notch selection: ``"compat"``, ``"equiband_wide"``,
-        ``"equiband"``, ``"color_under"``, ``"wideband_i_ssb"``, ``"equiband_vsb"``.
-    color_difference_precision:
-        Color-difference matrix precision: ``"classic"`` or ``"modern"``.
-    broadcast_scaling_precision:
-        Broadcast-safe scaling precision: ``"classic"``, ``"modern"`` or
-        ``"scientific"``.
-    model_version, model_path, model_input_scale, onnx_provider,
-    model_chroma_bandpass:
-        Neural-decoder controls (only valid with an NN ``decoder``).
-        ``model_version`` selects a bundled model; ``model_path`` supplies custom
-        weights (``.onnx``, or a CoreML ``.mlpackage`` on macOS).
-        ``onnx_provider`` pins an execution provider (one of ``auto``, ``cpu``,
-        ``cuda``/``gpu``, ``tensorrt``/``trt``, ``migraphx``, ``directml``,
-        ``coreml``); an unavailable accelerator falls back to CPU.
-        ``model_chroma_bandpass`` (``ldzeug2_luma_sep`` / ``ldzeug2_luma_sep_frame``
-        only) toggles the post-demodulation I/Q low-pass.
-    first_active_sample, last_active_sample:
-        Inclusive horizontal crop, in the sample numbering of the 4𝑓𝑠𝑐 interface
-        standards (SMPTE ST 244 for 525-line, EBU Tech 3280-E for 625-line):
-        sample 0 is the first sample of the digital active line. Negative
-        numbers count back from there into the line blanking that precedes it.
-        Defaults to the standard's whole digital active line.
-    first_active_line, last_active_line:
-        Inclusive vertical crop, in the field-sequential signal line numbers of
-        SMPTE ST 170, ITU-R BT.470 / BT.1700 and EBU Tech 3280. ``first`` is the
-        window's *topmost* line, which on a 525-line system is a field 2 line
-        and so carries the higher number (the standard window is 283..263).
-        Defaults to the video system's standard active picture.
-    annotate_dropouts:
-        Record each frame's dropout regions in the ``AnalogDropoutSpans`` frame
-        property, for :func:`dropout_spans` and :func:`create_dropouts_mask`.
-        Independent of ``dropout_correct``: annotate without correcting to hand
-        the damaged regions to another filter, or alongside it to see what was
-        concealed. ``dropout_overcorrect`` widens what gets reported to the
-        footprint correction would touch.
     """
     _validate_choice("color_family", color_family, _COLOR_FAMILIES)
     _validate_choice("chroma_filter", chroma_filter, _CHROMA_FILTERS)
