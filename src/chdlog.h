@@ -12,6 +12,8 @@
 
 #include <VapourSynth4.h>
 
+#include <string>
+
 namespace chdlog {
 
 // libchromadec emits nothing until a consumer installs a sink; failures come
@@ -31,6 +33,13 @@ void detach(VSCore *core);
 // Drop diagnostics below this level inside libchromadec. Process-global, like
 // the sink itself; defaults to CHD_LOG_INFO.
 void setLevel(chd_log_level_t level);
+
+// Emit one of the plugin's own messages on the same log, so a reader sees it
+// alongside the library's. Silently dropped when no core is attached, which is
+// the same contract libchromadec's diagnostics get.
+void warn(const std::string &message);
+void info(const std::string &message);
+void debug(const std::string &message);
 
 }  // namespace chdlog
 

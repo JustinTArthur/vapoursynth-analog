@@ -80,6 +80,148 @@ endif
 chromadec_dep = dependency('chromadec', default_options: chromadec_opts)
 
 # =====================
+# GPU vendor-runtime preload table
+# =====================
+
+# The GPU wheels exclude the vendor runtime (CUDA, cuDNN, TensorRT) and expect
+# the user to supply it; src/gpupreload.cpp and the wheel's
+# _vsanalog_gpu_preload.py resolve pip-installed copies at load time. Both
+# read the same table built here: each entry is the platform library name with
+# its major baked in (the bundled ONNX Runtime pins the majors) and the
+# site-packages-relative directories the pip packages use. Leaves first, so a
+# preloaded library satisfies every later one's dependency on it. CUDA 12
+# wheels install per-component directories (nvidia/<pkg>/lib) where CUDA 13
+# consolidates under nvidia/cu13/, hence the per-major dir lists; TensorRT
+# ships in tensorrt_libs on both.
+gpu_runtime_name = 'none'
+gpu_preload_entries = []
+if ep == 'cuda' and not is_darwin
+    cuda_dep = dependency('cuda', version: '>=12')
+    cuda_major = cuda_dep.version().split('.')[0]
+    gpu_runtime_name = 'cuda' + cuda_major
+    if host_machine.system() == 'windows'
+        if cuda_major == '13'
+            gpu_preload_entries = [
+                ['cudart64_13.dll',     ['nvidia/cu13/bin', 'nvidia/cuda_runtime/bin']],
+                ['nvrtc64_130_0.dll',   ['nvidia/cu13/bin', 'nvidia/cuda_nvrtc/bin']],
+                ['cublasLt64_13.dll',   ['nvidia/cu13/bin', 'nvidia/cublas/bin']],
+                ['cublas64_13.dll',     ['nvidia/cu13/bin', 'nvidia/cublas/bin']],
+                ['curand64_10.dll',     ['nvidia/cu13/bin', 'nvidia/curand/bin']],
+                ['cufft64_12.dll',      ['nvidia/cu13/bin', 'nvidia/cufft/bin']],
+                ['cudnn64_9.dll',       ['nvidia/cudnn/bin', 'nvidia/cu13/bin']],
+                ['nvinfer_10.dll',      ['tensorrt_libs']],
+                ['nvonnxparser_10.dll', ['tensorrt_libs']],
+            ]
+        else
+            gpu_preload_entries = [
+                ['cudart64_12.dll',     ['nvidia/cuda_runtime/bin']],
+                ['nvrtc64_120_0.dll',   ['nvidia/cuda_nvrtc/bin']],
+                ['cublasLt64_12.dll',   ['nvidia/cublas/bin']],
+                ['cublas64_12.dll',     ['nvidia/cublas/bin']],
+                ['curand64_10.dll',     ['nvidia/curand/bin']],
+                ['cufft64_11.dll',      ['nvidia/cufft/bin']],
+                ['cudnn64_9.dll',       ['nvidia/cudnn/bin']],
+                ['nvinfer_10.dll',      ['tensorrt_libs']],
+                ['nvonnxparser_10.dll', ['tensorrt_libs']],
+            ]
+        endif
+    else
+        if cuda_major == '13'
+            gpu_preload_entries = [
+                ['libcudart.so.13',      ['nvidia/cu13/lib', 'nvidia/cuda_runtime/lib']],
+                ['libnvrtc.so.13',       ['nvidia/cu13/lib', 'nvidia/cuda_nvrtc/lib']],
+                ['libcublasLt.so.13',    ['nvidia/cu13/lib', 'nvidia/cublas/lib']],
+                ['libcublas.so.13',      ['nvidia/cu13/lib', 'nvidia/cublas/lib']],
+                ['libcurand.so.10',      ['nvidia/cu13/lib', 'nvidia/curand/lib']],
+                ['libcufft.so.12',       ['nvidia/cu13/lib', 'nvidia/cufft/lib']],
+                ['libcudnn.so.9',        ['nvidia/cudnn/lib', 'nvidia/cu13/lib']],
+                ['libnvinfer.so.10',     ['tensorrt_libs']],
+                ['libnvonnxparser.so.10', ['tensorrt_libs']],
+            ]
+        else
+            gpu_preload_entries = [
+                ['libcudart.so.12',      ['nvidia/cuda_runtime/lib']],
+                ['libnvrtc.so.12',       ['nvidia/cuda_nvrtc/lib']],
+                ['libcublasLt.so.12',    ['nvidia/cublas/lib']],
+                ['libcublas.so.12',      ['nvidia/cublas/lib']],
+                ['libcurand.so.10',      ['nvidia/curand/lib']],
+                ['libcufft.so.11',       ['nvidia/cufft/lib']],
+                ['libcudnn.so.9',        ['nvidia/cudnn/lib']],
+                ['libnvinfer.so.10',     ['tensorrt_libs']],
+                ['libnvonnxparser.so.10', ['tensorrt_libs']],
+            ]
+        endif
+    endif
+endif
+
+# Runtime-dlopened families, resolved separately from the table above.
+#
+# cuDNN 9 is a thin loader shim over a family of sublibraries that it dlopens
+# by bare soname when a kernel first needs one. Resolving libcudnn alone
+# leaves the shim unable to find its engines, and ONNX Runtime surfaces that
+# as a failure inside the Conv kernel rather than as a missing library — for
+# nnTransform3D, a frame that silently decodes 2D instead. So the family has
+# to be resolved too, leaves first (libcudnn_graph backs the rest).
+#
+# These load only when an accelerated backend is actually used, not at
+# interpreter startup like the table above: the family is ~920 MB and costs
+# ~170 MB of RSS to map, which no unrelated Python process in the environment
+# should pay. Nothing here is a link-time dependency of the plugin, so
+# deferring them changes nothing about plugin load; src/gpupreload.cpp pulls
+# them in from the NN session path, ahead of any inference.
+gpu_dlopen_entries = []
+if ep == 'cuda' and not is_darwin
+    cudnn_family = [
+        'graph', 'ops', 'heuristic', 'engines_precompiled',
+        'engines_runtime_compiled', 'engines_tensor_ir', 'adv', 'cnn', 'ext',
+    ]
+    if host_machine.system() == 'windows'
+        cudnn_dirs = cuda_major == '13' ? ['nvidia/cudnn/bin', 'nvidia/cu13/bin'] \
+                                        : ['nvidia/cudnn/bin']
+        foreach part : cudnn_family
+            gpu_dlopen_entries += [['cudnn_' + part + '64_9.dll', cudnn_dirs]]
+        endforeach
+    else
+        cudnn_dirs = cuda_major == '13' ? ['nvidia/cudnn/lib', 'nvidia/cu13/lib'] \
+                                        : ['nvidia/cudnn/lib']
+        foreach part : cudnn_family
+            gpu_dlopen_entries += [['libcudnn_' + part + '.so.9', cudnn_dirs]]
+        endforeach
+    endif
+endif
+
+gpu_table_cxx = ''
+gpu_table_py = '('
+foreach entry : gpu_preload_entries
+    dirs_cxx = ''
+    dirs_py = ''
+    foreach dir : entry[1]
+        dirs_cxx += '"' + dir + '", '
+        dirs_py += '"' + dir + '", '
+    endforeach
+    gpu_table_cxx += '{ "' + entry[0] + '", { ' + dirs_cxx + '} }, '
+    gpu_table_py += '("' + entry[0] + '", (' + dirs_py + ')), '
+endforeach
+gpu_table_py += ')'
+
+# The dlopen families reach the plugin the same way, and the Python module as
+# data only — it never loads them, but tools/check_gpu_preload_table.py reads
+# the table from there to check its coverage against the installed pip layout.
+gpu_dlopen_cxx = ''
+gpu_dlopen_py = '('
+foreach entry : gpu_dlopen_entries
+    dirs_cxx = ''
+    dirs_py = ''
+    foreach dir : entry[1]
+        dirs_cxx += '"' + dir + '", '
+        dirs_py += '"' + dir + '", '
+    endforeach
+    gpu_dlopen_cxx += '{ "' + entry[0] + '", { ' + dirs_cxx + '} }, '
+    gpu_dlopen_py += '("' + entry[0] + '", (' + dirs_py + ')), '
+endforeach
+gpu_dlopen_py += ')'
+
+# =====================
 # vapoursynth-analog plugin
 # =====================
 
@@ -89,6 +231,7 @@ vsanalog_sources = files(
     'src/analog4fsc.cpp',
     'src/chdlog.cpp',
     'src/chromadecsource.cpp',
+    'src/gpupreload.cpp',
     'src/modernizechromaticity.cpp',
     'src/resizeuv.cpp',
 )
@@ -115,6 +258,16 @@ vsanalog_sources += configure_file(
     input: 'src/version.h.in',
     output: 'version.h',
     configuration: version_cfg,
+)
+
+gpupreload_cfg = configuration_data()
+gpupreload_cfg.set('VSA_GPU_RUNTIME', gpu_runtime_name)
+gpupreload_cfg.set('VSA_GPU_PRELOAD_TABLE', gpu_table_cxx)
+gpupreload_cfg.set('VSA_GPU_DLOPEN_TABLE', gpu_dlopen_cxx)
+vsanalog_sources += configure_file(
+    input: 'src/gpupreload_config.h.in',
+    output: 'gpupreload_config.h',
+    configuration: gpupreload_cfg,
 )
 
 vsanalog_inc = include_directories('src')
@@ -153,6 +306,27 @@ if get_option('build_wheel')
     plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins' / 'vsanalog'
     install_data('manifest.vs', install_dir: plugin_install_dir)
     subdir('python/vsanalog')
+
+    # GPU wheels also install a preload module at the site-packages root plus
+    # a .pth that runs it at interpreter startup — before VapourSynth's
+    # autoloader can touch the plugin, whose own link-time CUDA dependencies
+    # (with_cuda builds) must already resolve by then. Sited at the root, not
+    # in the package, so the .pth never imports vsanalog (and with it
+    # vapoursynth) into every interpreter in the environment.
+    if gpu_preload_entries.length() > 0
+        gpu_preload_py_cfg = configuration_data()
+        gpu_preload_py_cfg.set('VSA_GPU_RUNTIME', gpu_runtime_name)
+        gpu_preload_py_cfg.set('VSA_GPU_PRELOAD_TABLE_PY', gpu_table_py)
+        gpu_preload_py_cfg.set('VSA_GPU_DLOPEN_TABLE_PY', gpu_dlopen_py)
+        configure_file(
+            input: 'python/_vsanalog_gpu_preload.py.in',
+            output: '_vsanalog_gpu_preload.py',
+            configuration: gpu_preload_py_cfg,
+            install: true,
+            install_dir: py.get_install_dir(),
+        )
+        install_data('python/vsanalog_gpu.pth', install_dir: py.get_install_dir())
+    endif
 else
     # Newer, Python-oriented VapourSynth drops libdir from its pkg-config file
     # (plugins autoload from site-packages); fall back to the standard libdir.

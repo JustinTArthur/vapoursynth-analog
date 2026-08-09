@@ -73,7 +73,8 @@ public:
     void setDropout(bool enabled, bool overcorrect, bool intra);
     // Load the model with the requested backend and attach it. Falls back to
     // the ORT CPU EP if a pinned accelerator backend fails to load.
-    void setNnModel(const std::string &modelPath, chd_nn_backend_t backend);
+    void setNnModel(const std::string &modelPath, chd_nn_backend_t backend,
+                    chd_nn_compute_precision_t precision);
 
     void commit();
     const chd_output_info_t &outputInfo() const { return oinfo_; }

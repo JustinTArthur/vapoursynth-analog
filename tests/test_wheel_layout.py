@@ -65,7 +65,7 @@ def test_bundled_models_present():
     vsanalog = pytest.importorskip("vsanalog")
     assert (_site() / "vsanalog" / "models").is_dir()
     for decoder, versions in vsanalog._NN_DECODERS.items():
-        for version, (rel_onnx, _) in versions.items():
+        for version, (rel_onnx, *_rest) in versions.items():
             path = vsanalog._bundled_model_path(rel_onnx)
             assert path.exists(), f"{decoder} {version}: missing {path}"
 

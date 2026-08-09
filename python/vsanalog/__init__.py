@@ -8,6 +8,17 @@ from importlib.metadata import PackageNotFoundError, version as _get_version
 from pathlib import Path
 from typing import Any
 
+# GPU wheel variants ship a vendor-runtime preload module at the site-packages
+# root, normally run by its .pth at interpreter startup. Run it here too —
+# idempotently, and before the vapoursynth import below can create a core and
+# autoload the plugin — for interpreters that skipped site processing.
+try:
+    import _vsanalog_gpu_preload
+except ImportError:
+    pass
+else:
+    _vsanalog_gpu_preload.preload()
+
 import vapoursynth as vs
 
 from .plugin import requires_plugin
@@ -42,27 +53,40 @@ _BROADCAST_SCALING_PRECISIONS = {"classic", "modern", "scientific"}
 # --- Neural-network decoders ---------------------------------------------------
 # Model weights ship inside the wheel under models/. On macOS the bundled
 # artifact is a native CoreML .mlpackage (converted from the ONNX at build time);
-# every other platform bundles the .onnx and runs it through ONNX Runtime.
+# every other platform bundles the .onnx and runs it through ONNX Runtime. The
+# Apple-silicon nnTransform3D v2 package is converted at fp16 so it can run on
+# the Neural Engine; see tools/convert_models_macos.py.
 _MODELS_DIR = Path(__file__).resolve().parent / "models"
 
-# decoder -> {model_version: (relative .onnx path, nn_input_magnitude_scale)}
-_NN_DECODERS: dict[str, dict[str, tuple[str, float]]] = {
+# decoder -> {model_version: (relative .onnx path, nn_input_magnitude_scale,
+#                             fp16_safe)}
+#
+# fp16_safe marks weights whose input contract keeps every tensor inside fp16's
+# range, which is a property of the training scale rather than of the graph: the
+# nnTransform3D v2 weights divide their input magnitudes by 128 precisely so the
+# spectrum fits, while the v1 series feeds unscaled magnitudes that overflow into
+# NaN masks and the ldzeug2 models break on fp16 index math. It drives both the
+# macOS conversion precision (tools/convert_models_macos.py) and the plugin's
+# model_precision.
+_NN_DECODERS: dict[str, dict[str, tuple[str, float, bool]]] = {
     "nntransform3d": {
-        "v1_202512": ("nntransform3d/chroma_net-v1-202512.onnx", 1.0),
-        "v1_202603": ("nntransform3d/chroma_net-v1-202603.onnx", 1.0),
-        "v2": ("nntransform3d/chroma_net-v2-202605.onnx", 128.0),
+        "v1_202512": ("nntransform3d/chroma_net-v1-202512.onnx", 1.0, False),
+        "v1_202603": ("nntransform3d/chroma_net-v1-202603.onnx", 1.0, False),
+        "v2": ("nntransform3d/chroma_net-v2-202605.onnx", 128.0, True),
     },
     "ldzeug2_color_cnn": {
-        "1031640": ("ldzeug/color_cnn_1031640.onnx", 1.0),
-        "denoise_613928_ft22k": ("ldzeug/color_cnn_denoise_613928_ft22k.onnx", 1.0),
-        "v2_alot": ("ldzeug/color_cnn_v2_alot.onnx", 1.0),
+        "1031640": ("ldzeug/color_cnn_1031640.onnx", 1.0, False),
+        "denoise_613928_ft22k": (
+            "ldzeug/color_cnn_denoise_613928_ft22k.onnx", 1.0, False,
+        ),
+        "v2_alot": ("ldzeug/color_cnn_v2_alot.onnx", 1.0, False),
     },
     "ldzeug2_luma_sep": {
-        "2dgray_fields": ("ldzeug/luma_sep_2dgray_fields.onnx", 1.0),
+        "2dgray_fields": ("ldzeug/luma_sep_2dgray_fields.onnx", 1.0, False),
     },
     "ldzeug2_luma_sep_frame": {
         "2d_frame_gray_gray_run2_latest": (
-            "ldzeug/luma_sep_2d_frame_gray_gray_run2_latest.onnx", 1.0,
+            "ldzeug/luma_sep_2d_frame_gray_gray_run2_latest.onnx", 1.0, False,
         ),
     },
 }
@@ -82,6 +106,8 @@ _BANDPASS_DECODERS = {"ldzeug2_luma_sep", "ldzeug2_luma_sep_frame"}
 _NN_PROVIDERS = frozenset({
     "auto", "cpu", "cuda", "gpu", "tensorrt", "trt", "migraphx", "directml", "coreml",
 })
+
+_NN_PRECISIONS = {"fp32", "fp16"}
 
 
 @requires_plugin
@@ -121,18 +147,19 @@ def _resolve_nn_model(
     decoder: str,
     model_version: str | None,
     model_path: str | Path | None,
-) -> tuple[str, float]:
-    """Return ``(path, nn_input_magnitude_scale)`` for an NN decoder.
+) -> tuple[str, float, bool]:
+    """Return ``(path, nn_input_magnitude_scale, fp16_safe)`` for an NN decoder.
 
-    A user-supplied ``model_path`` wins and is used verbatim (scale 1.0);
-    otherwise the bundled model for ``model_version`` (or the decoder default)
-    is located, choosing the ``.mlpackage`` on macOS and the ``.onnx`` elsewhere.
+    A user-supplied ``model_path`` wins and is used verbatim (scale 1.0, and not
+    assumed fp16-safe — nothing here can inspect its training scale); otherwise
+    the bundled model for ``model_version`` (or the decoder default) is located,
+    choosing the ``.mlpackage`` on macOS and the ``.onnx`` elsewhere.
     """
     if model_path is not None:
         path = Path(model_path).expanduser()
         if not path.exists():
             raise FileNotFoundError(f"model_path does not exist: {path}")
-        return str(path), 1.0
+        return str(path), 1.0, False
 
     versions = _NN_DECODERS[decoder]
     version = model_version or _NN_DECODER_DEFAULT_VERSION[decoder]
@@ -142,14 +169,14 @@ def _resolve_nn_model(
             f"Unknown model_version {version!r} for decoder {decoder!r}. "
             f"Valid versions: {valid}"
         )
-    rel_onnx, scale = versions[version]
+    rel_onnx, scale, fp16_safe = versions[version]
     path = _bundled_model_path(rel_onnx)
     if not path.exists():
         raise FileNotFoundError(
             f"Bundled model not found at {path}. The vsanalog wheel may have "
             "been built without neural-network models."
         )
-    return str(path), scale
+    return str(path), scale, fp16_safe
 
 
 def _validate_choice(name: str, value: str | None, allowed: set[str]) -> None:
@@ -173,6 +200,7 @@ def decode_4fsc_video(
     model_version: str | None = None,
     model_path: str | Path | None = None,
     model_input_scale: float | None = None,
+    model_precision: str | None = None,
     onnx_provider: str | None = None,
     model_chroma_bandpass: bool | None = None,
     reverse_fields: bool = False,
@@ -221,6 +249,7 @@ def decode_4fsc_video(
         "model_version": model_version,
         "model_path": model_path,
         "model_input_scale": model_input_scale,
+        "model_precision": model_precision,
         "onnx_provider": onnx_provider,
     }
     if not is_nn_decoder:
@@ -237,6 +266,7 @@ def decode_4fsc_video(
         )
     if model_input_scale is not None and model_input_scale <= 0:
         raise ValueError("model_input_scale must be positive")
+    _validate_choice("model_precision", model_precision, _NN_PRECISIONS)
 
     kwargs: dict[str, Any] = {}
 
@@ -257,7 +287,7 @@ def decode_4fsc_video(
 
     if is_nn_decoder:
         assert decoder_lower is not None
-        path, registry_scale = _resolve_nn_model(
+        path, registry_scale, fp16_safe = _resolve_nn_model(
             decoder_lower, model_version, model_path,
         )
         kwargs["model_path"] = path
@@ -266,6 +296,11 @@ def decode_4fsc_video(
         scale = model_input_scale if model_input_scale is not None else registry_scale
         if scale != 1.0:
             kwargs["model_input_scale"] = scale
+        # fp16-safe weights allow it by default: only TensorRT acts on it, and
+        # there it buys a mixed-precision engine for well under a bit of chroma.
+        precision = model_precision or ("fp16" if fp16_safe else "fp32")
+        if precision != "fp32":
+            kwargs["model_precision"] = precision
         if onnx_provider is not None:
             provider = onnx_provider.strip().lower()
             if provider not in _NN_PROVIDERS:

@@ -107,6 +107,13 @@ Decoding
         ``"ldzeug2_luma_sep"``: ``"2dgray_fields"`` (default, only choice);
         ``"ldzeug2_luma_sep_frame"``: ``"2d_frame_gray_gray_run2_latest"``
         (default, only choice).
+
+        On Apple silicon the bundled ``nntransform3d`` ``"v2"`` package is
+        converted at fp16, which is what makes it eligible for the Apple
+        Neural Engine — the fastest placement measured, and the reason
+        ``"v2"``'s weights scale their input magnitudes down. Its masks differ
+        from the fp32 reference well below tape noise. Every other bundled
+        package, on every platform, is fp32.
     :type model_version: :py:class:`str` | None
 
     :param model_path:
@@ -117,6 +124,19 @@ Decoding
     :param model_input_scale:
         Override the model input magnitude divisor (``nntransform3d`` only).
     :type model_input_scale: :py:class:`float` | None
+
+    :param model_precision:
+        Compute precision a neural-network *decoder*'s backend may use:
+        ``"fp32"`` or ``"fp16"``. Permission rather than a guarantee — only a
+        backend that compiles the model into a device engine acts on it, which
+        today means TensorRT. Defaults to ``"fp16"`` for the bundled
+        ``nntransform3d`` ``"v2"`` weights and ``"fp32"`` for everything else,
+        including any custom *model_path* (nothing here can inspect an
+        arbitrary model's training scale, and fp16 on weights that overflow it
+        yields NaN output). fp16 and fp32 engines are cached separately, so
+        changing this never reuses an engine built the other way. Unrelated to
+        the macOS packages' precision, which is fixed when they are converted.
+    :type model_precision: :py:class:`str` | None
 
     :param onnx_provider:
         Execution provider for a neural-network *decoder*: ``"auto"``,

@@ -84,3 +84,27 @@ void chdlog::detach(VSCore *core) {
 void chdlog::setLevel(chd_log_level_t level) {
     chd_set_log_level(level);
 }
+
+namespace {
+
+void emit(int messageType, const std::string &message) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_destinations.empty()) return;
+    // Newest attachment, for the reason given on sink().
+    const Destination &dest = g_destinations.back();
+    dest.vsapi->logMessage(messageType, message.c_str(), dest.core);
+}
+
+}  // namespace
+
+void chdlog::warn(const std::string &message) {
+    emit(mtWarning, message);
+}
+
+void chdlog::info(const std::string &message) {
+    emit(mtInformation, message);
+}
+
+void chdlog::debug(const std::string &message) {
+    emit(mtDebug, message);
+}

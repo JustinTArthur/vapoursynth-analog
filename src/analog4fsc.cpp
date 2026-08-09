@@ -55,6 +55,18 @@ chd_nn_backend_t providerToBackend(const std::string &p) {
     return CHD_NN_BACKEND_AUTO;
 }
 
+// Map a compute-precision name to a libchromadec NN session precision. fp16 is
+// permission rather than a guarantee: only a backend that compiles the model
+// into a device engine acts on it (TensorRT, via trt_fp16_enable), and the rest
+// run the model at its stored precision. Rejected rather than ignored — a typo
+// would otherwise read as an fp16 run that quietly measured fp32.
+chd_nn_compute_precision_t parsePrecision(const std::string &p) {
+    if (p.empty() || p == "fp32") return CHD_NN_PRECISION_FP32;
+    if (p == "fp16") return CHD_NN_PRECISION_FP16_ALLOWED;
+    throw VSAnalogException("Unknown model_precision: " + p +
+                            " (expected \"fp32\" or \"fp16\")");
+}
+
 // The active window of an interface standard, inclusive, in that standard's own
 // numbering: samples from the start of the digital active line, lines as
 // field-sequential signal numbers. The sample window is the digital active
@@ -291,7 +303,8 @@ void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
     }
 
     if (isNnDecoder(kind)) {
-        src->setNnModel(opts->modelPath, providerToBackend(opts->onnxProvider));
+        src->setNnModel(opts->modelPath, providerToBackend(opts->onnxProvider),
+                        parsePrecision(opts->modelPrecision));
     }
 
     src->commit();

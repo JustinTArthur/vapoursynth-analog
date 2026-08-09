@@ -18,7 +18,8 @@ def test_signature_has_new_kwargs():
     for name in (
         "color_family", "chroma_filter", "color_difference_precision",
         "broadcast_scaling_precision", "model_version", "model_path",
-        "model_input_scale", "onnx_provider", "model_chroma_bandpass",
+        "model_input_scale", "model_precision", "onnx_provider",
+        "model_chroma_bandpass",
         "first_active_sample", "last_active_sample",
         "first_active_line", "last_active_line",
     ):
@@ -88,5 +89,33 @@ def test_default_versions_exist_in_registry():
 
 def test_nntransform3d_v2_scale():
     # v2 weights are trained at 16-bit and need the /128 input scale.
-    _, scale = vsanalog._NN_DECODERS["nntransform3d"]["v2"]
+    _, scale, _ = vsanalog._NN_DECODERS["nntransform3d"]["v2"]
     assert scale == 128.0
+
+
+def test_only_nntransform3d_v2_is_fp16_safe():
+    # The same /128 scale is what keeps v2's spectrum inside fp16 range. Every
+    # other bundled model overflows it or breaks on fp16 index math, and an
+    # fp16 engine built from those returns NaN rather than failing.
+    fp16 = {
+        (decoder, version)
+        for decoder, versions in vsanalog._NN_DECODERS.items()
+        for version, (_, _, safe) in versions.items()
+        if safe
+    }
+    assert fp16 == {("nntransform3d", "v2")}
+
+
+def test_custom_model_path_is_not_assumed_fp16_safe(tmp_path):
+    weights = tmp_path / "custom.onnx"
+    weights.write_bytes(b"")
+    _, _, fp16_safe = vsanalog._resolve_nn_model("nntransform3d", None, weights)
+    assert not fp16_safe
+
+
+@pytest.mark.parametrize("value", ["fp8", "FP16", "float16", ""])
+def test_invalid_model_precision_rejected(value):
+    with pytest.raises(ValueError):
+        vsanalog.decode_4fsc_video(
+            "x.tbc", decoder="nntransform3d", model_precision=value,
+        )

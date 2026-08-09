@@ -8,6 +8,10 @@ libchromadec's ``scripts/convert_coreml.py`` for each downloaded ``.onnx`` at it
 required fixed input shape (the NN decoders are NTSC-only), then removes the
 ``.onnx`` so the wheel carries only the CoreML artifacts.
 
+Models are converted at fp32 except nnTransform3D ``chroma_net`` v2, which is
+converted at fp16 on Apple silicon so it can run on the Neural Engine (see
+``_fp16_safe``).
+
 Run after tools/fetch_models.py. Requires a converter venv:
     pip install coremltools onnx2torch torch onnx
 
@@ -20,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +32,13 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_DEST = _ROOT / "python" / "vsanalog" / "models"
 _DEFAULT_SCRIPT = _ROOT / "subprojects" / "chromadec" / "scripts" / "convert_coreml.py"
+
+# Dest-relpath prefixes whose weights survive an fp16 conversion. nnTransform3D
+# chroma_net v2 divides its input magnitudes by 128 precisely so the spectrum
+# fits fp16's range; the v1 series feeds unscaled magnitudes that overflow it
+# and yield NaN masks, and both ldzeug2 models break on fp16 index math. See
+# libchromadec's docs/nn-models.md for the measured per-model errors.
+_FP16_SAFE_PREFIXES = ("nntransform3d/chroma_net-v2-",)
 
 
 def _convert_args(rel: str) -> list[str]:
@@ -47,6 +59,21 @@ def _convert_args(rel: str) -> list[str]:
     raise ValueError(f"no CoreML conversion mapping for {rel!r}")
 
 
+def _fp16_safe(rel: str, mode: str, machine: str) -> bool:
+    """Whether to convert this model at fp16, keyed on its dest-relpath.
+
+    An fp16 program is the only kind the Apple Neural Engine will take, and the
+    ANE is the fastest placement for chroma_net v2 — but only where there is
+    one. A GPU runs the fp16 kernels at the same rate as the fp32 ones, so the
+    package only pays for its pinned fp32 boundary casts and measures slightly
+    slower; an Intel Mac has no ANE to redeem that, so ``auto`` converts fp16
+    on Apple silicon only.
+    """
+    if mode == "never" or not rel.startswith(_FP16_SAFE_PREFIXES):
+        return False
+    return mode == "always" or machine == "arm64"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dest", type=Path, default=_DEFAULT_DEST)
@@ -55,6 +82,11 @@ def main() -> int:
                     help="Python interpreter with coremltools/onnx2torch/torch")
     ap.add_argument("--keep-onnx", action="store_true",
                     help="Keep the .onnx files alongside the .mlpackage")
+    ap.add_argument("--fp16", default="auto", choices=["auto", "always", "never"],
+                    help="Convert the fp16-safe models (nnTransform3D chroma_net "
+                         "v2) at fp16, making them Neural Engine eligible: auto "
+                         "(default) does so on Apple silicon only, never keeps "
+                         "everything fp32")
     args = ap.parse_args()
 
     onnx_files = sorted(args.dest.rglob("*.onnx"))
@@ -65,9 +97,11 @@ def main() -> int:
     for onnx in onnx_files:
         rel = onnx.relative_to(args.dest).as_posix()
         out = onnx.with_suffix(".mlpackage")
+        precision = "fp16" if _fp16_safe(rel, args.fp16, platform.machine()) else "fp32"
         cmd = [
             args.python, str(args.convert_script),
             "--onnx", str(onnx), "--out", str(out),
+            "--precision", precision,
             *_convert_args(rel),
         ]
         print("converting:", " ".join(cmd))

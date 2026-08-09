@@ -87,18 +87,21 @@ neural decoding through them takes a `model_path` you supply.
 
 ### GPU-accelerated neural decoding
 
-The PyPI wheels run neural decoders on CPU (Linux/Windows) or Apple CoreML
-(macOS). GPU-execution-provider wheels are too large for PyPI and are published
-separately (on GitHub Releases, or the project download site when they exceed
-the Release asset size limit): CUDA/TensorRT (Nvidia) and MIGraphX (AMD) for
-Linux, and CUDA (Nvidia) and DirectML (any DX12 GPU) for Windows. Install the
-matching wheel with `pip install <url>`.
+The PyPI wheels run neural decoders on CPU (Linux), on any DX12 GPU via
+DirectML with CPU fallback (Windows), or on Apple CoreML (macOS). The
+remaining GPU-execution-provider wheels are too large for PyPI and are
+published separately (on GitHub Releases, or the project download site when
+they exceed the Release asset size limit): CUDA/TensorRT (Nvidia) for Linux
+and Windows, and MIGraphX (AMD) for Linux. Install the matching wheel with
+`pip install <url>`.
 
 The CUDA and MIGraphX wheels carry a device-resident FFT pipeline linked
-against the vendor runtime, so they **require** a CUDA 12.x or ROCm 7.x
-installation — without it the plugin does not load at all, taking the ordinary
-composite decoders with it. The DirectML wheel and the PyPI wheels have no such
-requirement.
+against the vendor runtime, so they **require** a CUDA or ROCm 7.x installation
+— without it the plugin does not load at all, taking the ordinary composite
+decoders with it. CUDA ships as two builds, `0cuda12` and `0cuda13`, matching
+the toolkit major you have installed; note that CUDA 13 dropped support for
+Maxwell, Pascal and Volta cards, so anything older than Turing needs `0cuda12`.
+The PyPI wheels have no such requirement.
 
 ## Implementation Notes
 Signal decoding functionality comes from

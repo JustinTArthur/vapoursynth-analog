@@ -7,6 +7,9 @@
 
 #include "chromadecsource.h"
 
+#include "chdlog.h"
+#include "gpupreload.h"
+
 #include <cstdlib>
 #include <mutex>
 #include <string>
@@ -217,13 +220,32 @@ void ChromaDecSource::setDropout(bool enabled, bool overcorrect, bool intra) {
 }
 
 void ChromaDecSource::setNnModel(const std::string &modelPath,
-                                 chd_nn_backend_t backend) {
+                                 chd_nn_backend_t backend,
+                                 chd_nn_compute_precision_t precision) {
+    // The accelerated ONNX Runtime providers dlopen the vendor runtime when
+    // the session is created below; resolve pip-installed copies first so
+    // that works without LD_LIBRARY_PATH/PATH. CPU and native CoreML load
+    // nothing vendor-side.
+    if (backend != CHD_NN_ORT_CPU && backend != CHD_NN_COREML) {
+        gpupreload::ensureLoaded();
+    }
+
     chd_nn_session_opts_t opts;
     chd_nn_session_opts_default(&opts);
     opts.backend = backend;
-    // For the native CoreML backend, use every available compute unit (ANE
-    // included). Ignored by the ONNX Runtime backends.
+    // For the native CoreML backend, use every available compute unit. The ANE
+    // only runs fp16 programs, so this changes placement for the fp16-converted
+    // nnTransform3D v2 package the Apple-silicon wheel bundles and is a no-op
+    // for the fp32 ones. Ignored by the ONNX Runtime backends.
     opts.coreml_compute = CHD_NN_COREML_ALL;
+    // libchromadec defaults to a single intra-op thread because its own
+    // DecoderPool parallelises across frames. VapourSynth pulls one frame at a
+    // time (fmUnordered), so let ONNX Runtime use the cores instead.
+    opts.intra_op_threads = 0;
+    // Only TensorRT acts on this, building a mixed fp16/fp32 engine; every
+    // other backend runs the model at its stored precision. Engines built
+    // either way are cached separately, so flipping it can't serve a stale one.
+    opts.precision = precision;
 
     beginChdCall();
     chd_status_t s = chd_nn_model_load_from_file(modelPath.c_str(), &opts, &nn_);
@@ -231,10 +253,25 @@ void ChromaDecSource::setNnModel(const std::string &modelPath,
         // Graceful fallback: a pinned accelerator EP that isn't available on
         // this host retries on the ORT CPU EP so the process survives (a
         // native CoreML request needs no fallback).
+        //
+        // Say so. libchromadec deliberately reports an unavailable pinned
+        // backend rather than substituting one, and this retry overrides that
+        // decision — silently, it would leave a user who asked for an
+        // accelerator running an order of magnitude slower on the CPU with no
+        // way to find out. `auto` never reaches here: its fallback happens
+        // inside the library's own provider chain.
         if (backend != CHD_NN_ORT_CPU && backend != CHD_NN_COREML) {
+            const std::string reason = chdError("NN backend unavailable", s);
             opts.backend = CHD_NN_ORT_CPU;
             beginChdCall();
             s = chd_nn_model_load_from_file(modelPath.c_str(), &opts, &nn_);
+            if (s == CHD_OK) {
+                chdlog::warn(reason + "; the requested onnx_provider could not "
+                             "be used and this decode falls back to the CPU, "
+                             "which is far slower. Pass onnx_provider=\"auto\" "
+                             "to select the best provider this host can "
+                             "actually run.");
+            }
         }
         if (s != CHD_OK) {
             throw VSAnalogException(chdError("failed to load NN model", s));

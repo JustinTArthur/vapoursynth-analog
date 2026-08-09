@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/JustinTArthur/libchromadec.git
-revision = 07bf64a1462b0a5cf04bd6a730950fbcfa5f0efc
+revision = bb49b7ac31cc0a3c580400827ff29cfb2a3e27b4
 
 # libchromadec calls meson.override_dependency('chromadec', ...), so
 # dependency('chromadec') resolves to this subproject with no install step.

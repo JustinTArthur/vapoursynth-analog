@@ -11,11 +11,23 @@ The EP attach then fails and inference silently falls through to the CPU.
 This copies the provider libraries into the wheel's bundled-library directory
 and repacks so RECORD checksums stay valid.
 
-    python tools/inject_ort_providers.py <wheel> <lib> [<lib> ...]
+With ``--gpu-runtime-dirs``, additionally patches loader search-path entries
+pointing at the given site-packages-relative directories (pip's nvidia/* and
+tensorrt_libs) onto the injected provider libraries and the plugin itself, so
+their link-time vendor-runtime dependencies resolve from pip packages even in
+flows where no preload ran. Each file keeps the dynamic tag it already has:
+auditwheel deliberately stamps the plugin with DT_RPATH (so LD_LIBRARY_PATH
+cannot shadow the vendored ONNX Runtime), and flipping it to DT_RUNPATH would
+silently change that; a file with no tag gets DT_RUNPATH, which ranks below
+LD_LIBRARY_PATH and so cannot override a system runtime the user selected.
+
+    python tools/inject_ort_providers.py <wheel> <lib> [<lib> ...] \
+        [--gpu-runtime-dirs nvidia/cu13/lib:tensorrt_libs]
 """
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import subprocess
 import sys
@@ -26,14 +38,65 @@ from pathlib import Path
 # own --add-dll instead of this script.
 LIBS_DIR_NAME = "vsanalog.libs"
 
+PLUGIN_REL_PATH = Path("vapoursynth/plugins/vsanalog/vsanalog.so")
+
+
+def _rpath_state(lib: Path) -> tuple[str | None, str]:
+    """Return (dynamic tag or None, current search path string)."""
+    out = subprocess.run(
+        ["readelf", "-d", str(lib)], check=True, capture_output=True, text=True,
+    )
+    for line in out.stdout.splitlines():
+        for tag in ("RUNPATH", "RPATH"):
+            if f"({tag})" in line:
+                value = line[line.index("[") + 1 : line.rindex("]")] if "[" in line else ""
+                return tag, value
+    return None, ""
+
+
+def _add_search_path_entries(lib: Path, entries: list[str]) -> None:
+    tag, value = _rpath_state(lib)
+    current = [e for e in value.split(":") if e]
+    for entry in entries:
+        if entry not in current:
+            current.append(entry)
+    cmd = ["patchelf", "--set-rpath", ":".join(current), str(lib)]
+    if tag == "RPATH":
+        # Keep auditwheel's deliberate DT_RPATH; plain --set-rpath would
+        # convert it to DT_RUNPATH and let LD_LIBRARY_PATH shadow the
+        # vendored libraries.
+        cmd.insert(1, "--force-rpath")
+    subprocess.run(cmd, check=True)
+
+    after_tag, after_value = _rpath_state(lib)
+    expected_tag = tag if tag is not None else "RUNPATH"
+    if after_tag != expected_tag:
+        sys.exit(
+            f"{lib.name}: dynamic tag changed from {tag or 'none'} to "
+            f"{after_tag or 'none'} while patching; refusing to ship a wheel "
+            "whose library search precedence silently flipped."
+        )
+    missing = [e for e in entries if e not in after_value.split(":")]
+    if missing:
+        sys.exit(f"{lib.name}: entries not present after patching: {missing}")
+
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 3:
-        sys.stderr.write(f"usage: {argv[0]} <wheel> <lib> [<lib> ...]\n")
-        return 2
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("wheel", type=Path)
+    parser.add_argument("libs", nargs="+", type=Path)
+    parser.add_argument(
+        "--gpu-runtime-dirs",
+        help="colon-separated site-packages-relative directories to add as "
+        "$ORIGIN-relative RUNPATH entries on the injected libraries and the "
+        "plugin (Linux GPU wheels only)",
+    )
+    args = parser.parse_args(argv[1:])
 
-    wheel = Path(argv[1]).resolve()
-    libs = [Path(a).resolve() for a in argv[2:]]
+    wheel = args.wheel.resolve()
+    libs = [lib.resolve() for lib in args.libs]
 
     if not wheel.is_file():
         sys.stderr.write(f"wheel not found: {wheel}\n")
@@ -42,6 +105,10 @@ def main(argv: list[str]) -> int:
     if missing:
         sys.stderr.write("provider libraries not found:\n  " + "\n  ".join(missing) + "\n")
         return 1
+
+    runtime_dirs = []
+    if args.gpu_runtime_dirs:
+        runtime_dirs = [d for d in args.gpu_runtime_dirs.split(":") if d]
 
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -61,6 +128,23 @@ def main(argv: list[str]) -> int:
         for lib in libs:
             shutil.copy2(lib, libs_dir / lib.name)
 
+        if runtime_dirs:
+            # vsanalog.libs/ sits at the site-packages root, one level up from
+            # the vendor package directories.
+            provider_entries = [f"$ORIGIN/../{d}" for d in runtime_dirs]
+            for lib in libs:
+                _add_search_path_entries(libs_dir / lib.name, provider_entries)
+
+            # The plugin's own link-time vendor dependencies (with_cuda
+            # builds' cudart/cufft) resolve at plugin load; from
+            # vapoursynth/plugins/vsanalog/, site-packages is three up.
+            plugin = unpacked / PLUGIN_REL_PATH
+            if not plugin.is_file():
+                sys.stderr.write(f"plugin not found at {PLUGIN_REL_PATH} in wheel\n")
+                return 1
+            plugin_entries = [f"$ORIGIN/../../../{d}" for d in runtime_dirs]
+            _add_search_path_entries(plugin, plugin_entries)
+
         out_dir = wheel.parent
         wheel.unlink()
         subprocess.run(
@@ -68,7 +152,9 @@ def main(argv: list[str]) -> int:
             check=True,
         )
 
-    print(f"injected {', '.join(lib.name for lib in libs)} into {wheel.name}")
+    injected = ", ".join(lib.name for lib in libs)
+    note = f" (+ RUNPATH entries for {':'.join(runtime_dirs)})" if runtime_dirs else ""
+    print(f"injected {injected} into {wheel.name}{note}")
     return 0
 
 

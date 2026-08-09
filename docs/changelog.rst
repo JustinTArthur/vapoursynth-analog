@@ -54,15 +54,17 @@ Changelog
 - Added neural-network composite decoders — ``nntransform3d``,
   ``ldzeug2_color_cnn``, ``ldzeug2_luma_sep`` and ``ldzeug2_luma_sep_frame`` —
   with bundled models, ``onnx_provider`` execution-provider selection, and
-  graceful CPU fallback. macOS uses native CoreML; Linux/Windows use ONNX
-  Runtime.
+  graceful CPU fallback. macOS runs them on native CoreML — the Neural Engine
+  on Apple silicon — and the Windows wheel on any DirectX 12 GPU through
+  DirectML; separately published GPU wheels add Nvidia CUDA/TensorRT (Linux,
+  Windows) and AMD MIGraphX (Linux). See :doc:`installation`.
 - Read the newer CVBS capture format (``.composite``, or ``.y``/``.c`` for
   separated luma/chroma) in addition to ld-decode/vhs-decode ``.tbc``, selected
   by file extension. RAW (unscaled-ADC) CVBS encodings are rejected.
 - Added ``color_family`` to select ``YUV444PS`` (default), ``RGBS``, or
   ``GRAYS`` float output.
-- Added ``chroma_filter``, ``color_difference_precision`` and
-  ``broadcast_scaling_precision`` options.
+- Added ``chroma_filter``, ``model_precision``, ``color_difference_precision``
+  and ``broadcast_scaling_precision`` options.
 - Output geometry now follows the interface standards instead of the source's
   declared crop, so a video system always decodes to the same raster. NTSC and
   PAL-M give **768x486** (SMPTE ST 244's digital active line, ST 170's active

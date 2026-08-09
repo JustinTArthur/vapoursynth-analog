@@ -13,23 +13,43 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# ONNX Runtime version bundled on Linux/Windows. Must be a release chromadec
-# builds against AND that publishes prebuilt tarballs on the ORT GitHub
-# releases. Bump together with the chromadec pin. macOS ignores this (native
-# CoreML, no ORT).
+# ONNX Runtime version bundled on Linux and in the Windows CUDA variants. Must
+# be a release chromadec builds against AND that publishes prebuilt tarballs on
+# the ORT GitHub releases. Bump together with the chromadec pin. macOS ignores
+# this (native CoreML, no ORT); the default Windows wheel bundles the Windows
+# ML engine pinned by the ORT_WINML pair below instead.
+#
+# 1.27 is the floor for the GPU variants: it is where ORT started publishing a
+# CUDA 13 package, and where both CUDA majors got explicit asset names
+# (gpu_cuda12 / gpu_cuda13) in place of the single legacy "-gpu-" tarball.
+#
+# Two things to re-check whenever this moves:
+#   - The TensorRT major the TRT EP loads. 1.28 wants libnvinfer.so.10, while an
+#     unpinned tensorrt-cuXX from PyPI now installs 11.x, which it cannot use.
+#   - microsoft/onnxruntime#29779. Since 1.27 the TRT EP tests the composite
+#     NV_TENSORRT_VERSION against 11, which is true on every TensorRT 10, so it
+#     never marks networks strongly typed. Harmless for us — our models are all
+#     fp32, and with no precision flags TensorRT has only fp32 kernels either
+#     way — but it is why a bundled fp16 model would decode slowly.
 env:
-  ORT_VERSION: "1.22.0"
-  # The CUDA wheel links our own cuFFT kernels, so it needs a toolkit, not just
-  # ORT. Pinned to 12.x to match the CUDA the ORT GPU build loads: a 13.x
-  # toolkit would have our kernels on libcudart.so.13 while ORT wants .so.12.
-  CUDA_RPM_SUFFIX: "12-8"
-  CUDA_HOME_DIR: "/usr/local/cuda-12.8"
+  ORT_VERSION: "1.28.0"
   # MIGraphX comes from AMD, not Microsoft, and moves on ROCm's cadence rather
   # than ORT_VERSION's. onnxruntime-migraphx (not onnxruntime-rocm — that one
   # carries no MIGraphX EP) is published on ROCm's own manylinux index, built
   # for the matching ROCm release.
   ROCM_VERSION: "7.2.4"
   ORT_MIGRAPHX_VERSION: "1.23.2"
+  # DirectML-capable ORT comes from the Windows ML lineage: the classic
+  # Microsoft.ML.OnnxRuntime.DirectML packages froze at 1.24.4 on every
+  # channel, while onnxruntime-windowsml (MIT, on PyPI) keeps shipping current
+  # engines. This is the engine the default Windows wheel bundles — its CPU EP
+  # serves machines without a usable DX12 device, so it replaces the plain CPU
+  # build outright. The wheel pin carries a datestamp suffix on the engine
+  # version; the plain version pins the release archive that supplies the
+  # matching headers and import library. Bump the pair together, independently
+  # of ORT_VERSION.
+  ORT_WINML_VERSION: "1.27.1"
+  ORT_WINML_WHEEL_VERSION: "1.27.1.202607110137"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -325,6 +345,12 @@ jobs:
   # Both link the vendor toolkit for the device-resident pipeline, so both need
   # a real toolkit in the container, not just ONNX Runtime. The vendor runtime
   # is excluded from the wheel and must be present on the user's machine.
+  #
+  # CUDA ships as two variants because the toolkit major has to match the one
+  # ORT's GPU build loads — our cuFFT kernels and ORT must agree on libcudart.
+  # They are not interchangeable at the hardware level either: CUDA 13 dropped
+  # offline compilation for Maxwell/Pascal/Volta, so the cuda12 wheel is the
+  # only one that runs on pre-Turing cards.
   # NOTE: nothing here can exercise a GPU; the runners have none. This builds
   # and load-checks the wheel — attaching the EP needs a GPU validation job.
   # ---------------------------------------------------------------------------
@@ -335,18 +361,34 @@ jobs:
       matrix:
         include:
           - ep: cuda
+            variant: cuda12
+            cuda_rpm_suffix: "12-8"
+            cuda_home: /usr/local/cuda-12.8
+            ort_gpu_pkg: gpu_cuda12
+          - ep: cuda
+            variant: cuda13
+            cuda_rpm_suffix: "13-3"
+            cuda_home: /usr/local/cuda-13.3
+            ort_gpu_pkg: gpu_cuda13
           - ep: migraphx
+            variant: migraphx
+            cuda_rpm_suffix: ""
+            cuda_home: ""
+            ort_gpu_pkg: ""
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Fetch NN models
         run: python3 tools/fetch_models.py
-      - name: Build manylinux GPU wheel (${{ matrix.ep }})
+      - name: Build manylinux GPU wheel (${{ matrix.variant }})
         run: |
           mkdir -p wheelhouse
           docker run --rm \
             -e ORT_VERSION="${ORT_VERSION}" -e EP="${{ matrix.ep }}" \
-            -e CUDA_RPM_SUFFIX="${CUDA_RPM_SUFFIX}" -e CUDA_HOME_DIR="${CUDA_HOME_DIR}" \
+            -e VARIANT="${{ matrix.variant }}" \
+            -e CUDA_RPM_SUFFIX="${{ matrix.cuda_rpm_suffix }}" \
+            -e CUDA_HOME_DIR="${{ matrix.cuda_home }}" \
+            -e ORT_GPU_PKG="${{ matrix.ort_gpu_pkg }}" \
             -e ROCM_VERSION="${ROCM_VERSION}" -e ORT_MIGRAPHX_VERSION="${ORT_MIGRAPHX_VERSION}" \
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
@@ -395,7 +437,7 @@ jobs:
                           --exclude "libcufft*.so*" --exclude "libcudnn*.so*"
                           --exclude "libnvinfer*.so*" --exclude "libnvrtc*.so*")
 
-            curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu-${ORT_VERSION}.tgz" -o /tmp/ort.tgz
+            curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_GPU_PKG}-${ORT_VERSION}.tgz" -o /tmp/ort.tgz
             mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
           else
             cat > /etc/yum.repos.d/rocm.repo << REPO
@@ -448,14 +490,32 @@ jobs:
           # Retag so the variant does not collide with the PyPI wheel. A PEP 427
           # build tag (digits first) keeps the filename installable by pip; a
           # bare "-cuda" suffix does not parse as a wheel name at all.
-          python3 -m wheel tags --python-tag py3 --abi-tag none --build "0${EP}" /wheelhouse/*.whl --remove
+          python3 -m wheel tags --python-tag py3 --abi-tag none --build "0${VARIANT}" /wheelhouse/*.whl --remove
 
           # ORT dlopens its execution providers rather than linking them, so
           # auditwheel never sees them and the repaired wheel would carry the
-          # runtime with no provider to attach.
+          # runtime with no provider to attach. CUDA wheels also get
+          # $ORIGIN-relative RUNPATH entries for the pip nvidia/tensorrt
+          # directories on the injected providers and the plugin, so their
+          # link-time vendor deps resolve from pip packages even when no
+          # preload ran (RUNPATH ranks below LD_LIBRARY_PATH, so a system
+          # runtime keeps winning in that flow). Union of the cu12 and cu13
+          # pip layouts; the loader skips directories that do not exist.
+          GPU_DIRS_ARGS=()
+          if [ "${EP}" = "cuda" ]; then
+            GPU_DIRS_ARGS=(--gpu-runtime-dirs "nvidia/cu13/lib:nvidia/cuda_runtime/lib:nvidia/cuda_nvrtc/lib:nvidia/cublas/lib:nvidia/cufft/lib:nvidia/curand/lib:nvidia/cudnn/lib:tensorrt_libs")
+          fi
           for w in /wheelhouse/*.whl; do
-            python3 tools/inject_ort_providers.py "$w" /opt/ort/lib/libonnxruntime_providers_*.so
+            python3 tools/inject_ort_providers.py "$w" /opt/ort/lib/libonnxruntime_providers_*.so "${GPU_DIRS_ARGS[@]}"
           done
+
+          # Declare the pip vendor-runtime sets as [cuda]/[tensorrt] extras.
+          # The requirement sets live in tools/add_variant_extras.py, keyed by
+          # variant; meson-python cannot vary Requires-Dist per build, so they
+          # are stamped into the finished wheel.
+          if [ "${EP}" = "cuda" ]; then
+            python3 tools/add_variant_extras.py /wheelhouse/*.whl --variant "${VARIANT}"
+          fi
 
           # Load check. The vendor runtime is excluded from the wheel, so the
           # loader needs it on the path here exactly as a user would.
@@ -463,10 +523,36 @@ jobs:
           python3 -m pip install --quiet /wheelhouse/*.whl
           python3 tools/check_wheel_plugin.py
           python3 -m pytest -v tests/test_autoload.py
+
+          # Pip-flow load checks: with LD_LIBRARY_PATH gone, the plugin
+          # link-time CUDA deps must resolve from pip nvidia wheels — once
+          # through the .pth preload, once (preload disabled) through the
+          # RUNPATH entries alone. No GPU needed; nothing calls cuInit at
+          # plugin load.
+          if [ "${EP}" = "cuda" ]; then
+            # The runtime comes in through the wheel's own [cuda] extra, so a
+            # drifted pin set fails this leg instead of a user install. This
+            # also puts a full cuDNN layout on disk, which the preload-table
+            # check needs: cuDNN's sublibraries are dlopened by soname at
+            # runtime, so table coverage of them can only be checked against a
+            # real pip layout. [tensorrt] is metadata-only in CI — its libs
+            # are a multi-gigabyte install-time fetch from pypi.nvidia.com.
+            w=$(ls /wheelhouse/*.whl)
+            python3 -m pip install --quiet --no-cache-dir "vsanalog[cuda] @ file://${w}"
+
+            # The preload table must cover every vendor soname the shipped
+            # binaries link, plus every member of a dlopened family the pip
+            # packages ship; an ORT or cuDNN bump that changes either fails
+            # here, not silently on user machines.
+            python3 tools/check_gpu_preload_table.py
+            env -u LD_LIBRARY_PATH python3 tools/check_wheel_plugin.py
+            env -u LD_LIBRARY_PATH VSANALOG_GPU_RUNTIME=off python3 tools/check_wheel_plugin.py
+            env -u LD_LIBRARY_PATH python3 -m pytest -v tests/test_autoload.py
+          fi
           '
       - uses: actions/upload-artifact@v6
         with:
-          name: vsanalog-wheel-linux-x86_64-${{ matrix.ep }}
+          name: vsanalog-wheel-linux-x86_64-${{ matrix.variant }}
           path: wheelhouse/*.whl
 
   # ---------------------------------------------------------------------------
@@ -506,13 +592,39 @@ jobs:
       - name: Fetch NN models
         run: python tools/fetch_models.py
 
-      - name: Install ONNX Runtime (CPU)
+      # The wheel bundles the DML-capable engine from the Windows ML lineage:
+      # onnxruntime.dll (CPU and DirectML EPs built in, so machines without a
+      # usable DX12 device still decode) with DirectML.dll beside it, both
+      # harvested from the MIT-licensed onnxruntime-windowsml wheel. Not the
+      # Windows ML NuGet, whose proprietary license terms rule out
+      # redistribution inside this GPL wheel; not the classic DirectML NuGet,
+      # which is frozen at ORT 1.24.4 on every channel. Headers and the import
+      # library come from the same-version plain release archive: the wheel
+      # carries neither, and the generic AppendExecutionProvider("DML") attach
+      # needs no DML-specific header, so the stock ones suffice.
+      #
+      # chromadec resolves -Donnxruntime_root as <root>/lib + <root>/include,
+      # a shape neither artifact has alone, so the root is assembled from
+      # both. Left unassembled the library lookup just fails, has_ort goes
+      # false, and the wheel ships with no neural-network decoders at all and
+      # no error.
+      - name: Install ONNX Runtime (Windows ML engine)
         shell: pwsh
         run: |
-          $ort = "onnxruntime-win-x64-$env:ORT_VERSION"
-          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$ort.zip" -OutFile ort.zip
+          $ort = "onnxruntime-win-x64-$env:ORT_WINML_VERSION"
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_WINML_VERSION/$ort.zip" -OutFile ort.zip
           Expand-Archive ort.zip -DestinationPath ort_extract
-          "ORT_ROOT=$PWD/ort_extract/$ort" | Out-File -FilePath $env:GITHUB_ENV -Append
+          pip download "onnxruntime-windowsml==$env:ORT_WINML_WHEEL_VERSION" --no-deps --only-binary=:all: -d winml_wheel
+          $whl = Get-ChildItem winml_wheel/*.whl | Select-Object -First 1
+          python -m zipfile -e $whl.FullName winml_wheel/unpacked
+
+          $root = "$PWD/ort_root"
+          New-Item -ItemType Directory -Force -Path "$root/lib" | Out-Null
+          Copy-Item -Recurse "$PWD/ort_extract/$ort/include" "$root/include"
+          Copy-Item "$PWD/ort_extract/$ort/lib/onnxruntime.lib" "$root/lib/"
+          Copy-Item "winml_wheel/unpacked/onnxruntime/capi/onnxruntime.dll" "$root/lib/"
+          Copy-Item "winml_wheel/unpacked/onnxruntime/capi/DirectML.dll" "$root/lib/"
+          "ORT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Download VapourSynth SDK
         shell: pwsh
@@ -542,7 +654,7 @@ jobs:
           $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           pip install delvewheel wheel build
           python -m build --wheel -o dist/ `
-            -Csetup-args="-Dep=cpu" `
+            -Csetup-args="-Dep=directml" `
             -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT"
 
       # A whole second build at /arch:AVX2. clang-cl vectorises libchromadec's
@@ -554,7 +666,7 @@ jobs:
         run: |
           $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           meson setup build_avx2 -Dbuild_wheel=false `
-            -Dep=cpu -Dchromadec:onnxruntime_root="$env:ORT_ROOT" `
+            -Dep=directml -Dchromadec:onnxruntime_root="$env:ORT_ROOT" `
             -Dcpp_args=/arch:AVX2 -Dc_args=/arch:AVX2
           meson compile -C build_avx2
 
@@ -569,8 +681,26 @@ jobs:
           $wheel = Get-ChildItem tiered/*.whl | Select-Object -First 1
           # --namespace-pkg must name the plugin's own directory too, or
           # delvewheel mints an __init__.py inside it.
+          #
+          # The Windows ML engine is monolithic — its EPs live inside
+          # onnxruntime.dll — so DirectML.dll is the only library it reaches
+          # for at runtime: a delay-load by exact name, so delvewheel must
+          # vendor it (--add-dll) and may not rename it (--no-mangle).
+          #
+          # ext-ms-win-gdi-internal-uap-init-l1-1-0.dll is a Windows API Set:
+          # a virtual name the OS loader resolves itself, never a real file on
+          # disk, so delvewheel's dependency walker can't find it and needs to
+          # be told to stop looking. D3D12/DXCore/dxgi are genuine OS
+          # components onnxruntime.dll delay-loads; vendoring them means
+          # delvewheel mangles their names and, to keep DirectML.dll working,
+          # patches its own delay-import table in place — which corrupts it
+          # enough to crash onnxruntime.dll on first use, CPU and DirectML EP
+          # alike. Excluding them keeps DirectML.dll byte-identical to the
+          # working upstream copy.
           delvewheel repair --analyze-existing `
             --namespace-pkg "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog" `
+            --add-dll "DirectML.dll" --no-mangle "DirectML.dll" `
+            --exclude "ext-ms-win-gdi-internal-uap-init-l1-1-0.dll;D3D12.dll;DXCore.dll;dxgi.dll" `
             --add-path "$env:ORT_ROOT/lib" $wheel -w repaired/
 
       - name: Co-locate bundled DLLs with the plugin
@@ -616,11 +746,11 @@ jobs:
           path: vsanalog-*.tar.xz
 
   # ---------------------------------------------------------------------------
-  # Windows GPU variants — Release-only.
-  #   cuda     -> ORT GPU build (CUDA + TensorRT EPs) + native cuFFT pipeline
-  #   directml -> ORT DirectML build (AMD / Intel / any DX12 GPU)
-  # DirectML drives inference through ONNX Runtime only: there is no DirectML
-  # device-FFT pipeline in libchromadec, so that variant needs no toolkit.
+  # Windows GPU variants — Release-only: the ORT GPU build (CUDA + TensorRT
+  # EPs) plus the native cuFFT pipeline, as two toolkit-major variants for the
+  # reason given on the Linux GPU job above. DirectML is not a variant: the
+  # default Windows wheel bundles the DML-capable Windows ML engine (any DX12
+  # GPU, CPU fallback built in).
   # NOTE: nothing here can exercise a GPU; the runners have none. This builds
   # and load-checks the wheel — attaching the EP needs a GPU validation job.
   # ---------------------------------------------------------------------------
@@ -631,9 +761,13 @@ jobs:
       matrix:
         include:
           - ep: cuda
-            ort_pkg: onnxruntime-win-x64-gpu
-          - ep: directml
-            ort_pkg: ""   # from Microsoft.ML.OnnxRuntime.DirectML nupkg
+            variant: cuda12
+            cuda_toolkit: '12.8.0'
+            ort_pkg: onnxruntime-win-x64-gpu_cuda12
+          - ep: cuda
+            variant: cuda13
+            cuda_toolkit: '13.2.0'
+            ort_pkg: onnxruntime-win-x64-gpu_cuda13
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v6
@@ -658,48 +792,25 @@ jobs:
 
       # -Dep=cuda maps to with_cuda=enabled, which compiles our own cuFFT
       # kernels and so needs nvcc and the CUDA libraries, not just ORT. Pinned
-      # to the same 12.x major the ORT GPU build loads.
+      # to the same major the matching ORT GPU build loads.
       - name: Install CUDA toolkit
-        if: matrix.ep == 'cuda'
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: '12.8.0'
+          cuda: ${{ matrix.cuda_toolkit }}
           method: 'network'
           sub-packages: '["nvcc", "cudart", "cufft", "cufft_dev", "visual_studio_integration"]'
 
       - name: Fetch NN models
         run: python tools/fetch_models.py
 
-      # chromadec resolves -Donnxruntime_root as <root>/lib + <root>/include.
-      # The GPU zip already has that shape; the NuGet package does not — its
-      # headers are under build/native/include and the import library under
-      # runtimes/win-x64/native — so that one gets a root assembled for it.
-      # Left unassembled the library lookup just fails, has_ort goes false, and
-      # the wheel ships with no neural-network decoders at all and no error.
-      - name: Install ONNX Runtime (${{ matrix.ep }})
+      - name: Install ONNX Runtime (${{ matrix.variant }})
         shell: pwsh
         run: |
-          if ("${{ matrix.ep }}" -eq "cuda") {
-            $ort = "${{ matrix.ort_pkg }}-$env:ORT_VERSION"
-            Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$ort.zip" -OutFile ort.zip
-            Expand-Archive ort.zip -DestinationPath ort_extract
-            $root = "$PWD/ort_extract/$ort"
-            "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } else {
-            # nuget resolves the dependency on Microsoft.AI.DirectML, which is
-            # where DirectML.dll itself lives; the ORT package carries none.
-            nuget install Microsoft.ML.OnnxRuntime.DirectML -Version $env:ORT_VERSION -OutputDirectory nuget
-            $pkg = Get-ChildItem nuget -Directory -Filter "Microsoft.ML.OnnxRuntime.DirectML*" | Select-Object -First 1
-            $dml = Get-ChildItem nuget -Directory -Filter "Microsoft.AI.DirectML*" | Select-Object -First 1
-            if (-not $dml) { throw "Microsoft.AI.DirectML was not restored; DirectML.dll would be missing from the wheel" }
-
-            $root = "$PWD/ort_root"
-            New-Item -ItemType Directory -Force -Path "$root/lib" | Out-Null
-            Copy-Item -Recurse "$($pkg.FullName)/build/native/include" "$root/include"
-            Copy-Item "$($pkg.FullName)/runtimes/win-x64/native/*" "$root/lib/"
-            Copy-Item "$($dml.FullName)/bin/x64-win/DirectML.dll" "$root/lib/"
-            "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
-          }
+          $ort = "${{ matrix.ort_pkg }}-$env:ORT_VERSION"
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$ort.zip" -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort_extract
+          $root = "$PWD/ort_extract/$ort"
+          "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ORT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Download VapourSynth SDK
         shell: pwsh
@@ -721,7 +832,7 @@ jobs:
           Version: 70
           Cflags: -I`${includedir}
           "@ | Out-File -FilePath "pkgconfig/vapoursynth.pc" -Encoding ASCII -NoNewline
-      - name: Build wheel (${{ matrix.ep }})
+      - name: Build wheel (${{ matrix.variant }})
         shell: pwsh
         run: |
           $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
@@ -733,46 +844,23 @@ jobs:
 
           # ORT LoadLibrary's its execution providers by exact filename instead
           # of linking them, so delvewheel neither finds them (--add-dll) nor
-          # may rename them (--no-mangle). DirectML.dll is a redistributable we
-          # ship; the CUDA runtime is the user's to install, so it is excluded
-          # rather than vendored.
+          # may rename them (--no-mangle). The CUDA runtime is the user's to
+          # install, so it is excluded rather than vendored.
           #
           # ext-ms-win-gdi-internal-uap-init-l1-1-0.dll is a Windows API Set: a
           # virtual name the OS loader resolves itself, never a real file on
           # disk, so delvewheel's dependency walker can't find it and needs to
-          # be told to stop looking. Every EP hits this, not just DirectML's.
-          $addDll = "onnxruntime_providers_shared.dll"
-          $noMangle = "onnxruntime_providers_shared.dll"
-          $exclude = "ext-ms-win-gdi-internal-uap-init-l1-1-0.dll"
-          if ("${{ matrix.ep }}" -eq "cuda") {
-            $addDll = "$addDll;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
-            $noMangle = "$noMangle;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
-            # --exclude takes glob patterns, so these survive a CUDA minor bump.
-            $exclude = "$exclude;cudart64_*.dll;cufft64_*.dll;cublas*64_*.dll;cudnn*.dll;nvinfer*.dll"
-          } else {
-            $addDll = "$addDll;DirectML.dll"
-            $noMangle = "$noMangle;DirectML.dll"
-            # onnxruntime.dll delay-loads these three from D3D12/DXCore/DXGI;
-            # all are genuine OS components (confirmed present in System32),
-            # so exclude rather than vendor. Vendoring them means delvewheel
-            # mangles their names and, to keep DirectML.dll working, patches
-            # its own delay-import table in place — which corrupts it enough
-            # to crash onnxruntime.dll on first use, CPU and DirectML EP alike
-            # (delay-load failure, STATUS_DLL_NOT_FOUND). Excluding them keeps
-            # DirectML.dll byte-identical to the working upstream copy.
-            $exclude = "$exclude;D3D12.dll;DXCore.dll;dxgi.dll"
-          }
+          # be told to stop looking. Every EP hits this, not just CUDA's.
+          $addDll = "onnxruntime_providers_shared.dll;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
+          # --exclude takes glob patterns, so these survive a CUDA minor bump.
+          $exclude = "ext-ms-win-gdi-internal-uap-init-l1-1-0.dll;cudart64_*.dll;cufft64_*.dll;cublas*64_*.dll;cudnn*.dll;nvinfer*.dll"
           # --namespace-pkg must name the plugin's own directory too, or
           # delvewheel mints an __init__.py inside it.
-          $repairArgs = @(
-            "--analyze-existing",
-            "--namespace-pkg", "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog",
-            "--add-dll", $addDll,
-            "--no-mangle", $noMangle,
-            "--add-path", "$env:ORT_EP_DLL_DIR"
-          )
-          if ($exclude) { $repairArgs += @("--exclude", $exclude) }
-          delvewheel repair @repairArgs $wheel -w repaired/
+          delvewheel repair --analyze-existing `
+            --namespace-pkg "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog" `
+            --add-dll $addDll --no-mangle $addDll `
+            --exclude $exclude `
+            --add-path "$env:ORT_EP_DLL_DIR" $wheel -w repaired/
 
           # delvewheel vendors the dependency DLLs into a top-level
           # vsanalog.libs/ reachable only via an `import vsanalog` patch, which
@@ -783,9 +871,15 @@ jobs:
           $repaired = Get-ChildItem repaired/*.whl | Select-Object -First 1
           python tools/colocate_plugin_libs.py $repaired wheelhouse/
 
-          # Build tag (digits first) rather than a "-directml" suffix, which
+          # Build tag (digits first) rather than a "-cuda13" suffix, which
           # would make the filename unparseable and uninstallable by pip.
-          python -m wheel tags --python-tag py3 --abi-tag none --build "0${{ matrix.ep }}" (Get-ChildItem wheelhouse/*.whl) --remove
+          python -m wheel tags --python-tag py3 --abi-tag none --build "0${{ matrix.variant }}" (Get-ChildItem wheelhouse/*.whl) --remove
+
+          # Declare the pip vendor-runtime sets as [cuda]/[tensorrt] extras;
+          # the requirement sets live in tools/add_variant_extras.py. Metadata
+          # only on this leg — the Linux job installs through the extra to
+          # exercise it.
+          python tools\add_variant_extras.py (Get-ChildItem wheelhouse/*.whl).FullName --variant "${{ matrix.variant }}"
 
       # The vendor runtime is excluded from the CUDA wheel, so this also
       # confirms it resolves from a normal toolkit install rather than the
@@ -801,7 +895,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: vsanalog-wheel-windows-x64-${{ matrix.ep }}
+          name: vsanalog-wheel-windows-x64-${{ matrix.variant }}
           path: wheelhouse/*.whl
 
   # ---------------------------------------------------------------------------
@@ -942,7 +1036,7 @@ jobs:
       - uses: actions/download-artifact@v6
         continue-on-error: true
         with:
-          pattern: vsanalog-wheel-*-{cuda,migraphx,directml}
+          pattern: vsanalog-wheel-*-{cuda12,cuda13,migraphx}
           path: gpu-wheels
           merge-multiple: true
 
@@ -974,8 +1068,9 @@ jobs:
           files: gpu-wheels/*.whl
 
   # ---------------------------------------------------------------------------
-  # PyPI — lean wheels only (macOS CoreML, Linux/Windows CPU). GPU variants are
-  # Release-only and never published here.
+  # PyPI — lean wheels only (macOS CoreML, Linux CPU, Windows with the
+  # DML-capable Windows ML engine). GPU variants are Release-only and never
+  # published here.
   # ---------------------------------------------------------------------------
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -989,8 +1084,8 @@ jobs:
         with:
           name: vsanalog-sdist
           path: dist/
-      # Explicit lean-wheel names only: GPU-variant artifacts (…-0cuda /
-      # …-0migraphx / …-0directml) exist on the same tag run but must NOT be
+      # Explicit lean-wheel names only: GPU-variant artifacts (…-0cuda12 /
+      # …-0cuda13 / …-0migraphx) exist on the same tag run but must NOT be
       # published to PyPI.
       - uses: actions/download-artifact@v6
         with:

@@ -99,6 +99,14 @@ Decoding
         ``tensorrt``/``trt``, ``migraphx``, ``directml``, ``coreml``. Falls back
         to CPU when unavailable.
 
+    :param str model_precision:
+        Compute precision the backend may use: ``fp32`` (default) or ``fp16``.
+        Only a backend that compiles the model into a device engine acts on it
+        — TensorRT, which then builds mixed fp16/fp32 kernels and caches those
+        engines separately. Set ``fp16`` only for weights whose input contract
+        keeps every tensor in fp16 range; the Python wrapper knows which
+        bundled models qualify and sets this for you.
+
     :param int model_chroma_bandpass:
         I/Q low-pass toggle for ``ldzeug2_luma_sep``/``ldzeug2_luma_sep_frame``
         (default ``1``).

@@ -517,6 +517,7 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         // Neural-network options.
         Opts.modelPath = getOptString(In, "model_path", vsapi);
         Opts.onnxProvider = getOptString(In, "onnx_provider", vsapi);
+        Opts.modelPrecision = getOptString(In, "model_precision", vsapi);
         int modelBandpass = static_cast<int>(vsapi->mapGetInt(In, "model_chroma_bandpass", 0, &err));
         if (err) modelBandpass = 1;
         Opts.modelChromaBandpass = (modelBandpass != 0);
@@ -659,6 +660,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "last_active_line:int:opt;"
         "model_path:data:opt;"
         "onnx_provider:data:opt;"
+        "model_precision:data:opt;"
         "model_chroma_bandpass:int:opt;"
         "model_input_scale:float:opt;"
         "dropout_correct:int:opt;"

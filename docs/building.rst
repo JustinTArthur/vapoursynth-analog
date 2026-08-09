@@ -137,6 +137,16 @@ Model weights are not part of the build. The wheels bundle them; a plugin built
 this way takes an explicit ``model_path`` instead. ``tools/fetch_models.py``
 downloads and checksum-verifies the same weights from ``tools/models.lock``.
 
+On macOS the weights then go through ``tools/convert_models_macos.py``, which
+drives libchromadec's ``scripts/convert_coreml.py`` to produce the
+``.mlpackage`` bundles the native CoreML backend loads. It converts at fp32
+except the ``nntransform3d`` ``v2`` model, which it converts at fp16 on Apple
+silicon so the Apple Neural Engine — an fp16-only device — can take it. Pass
+``--fp16 never`` for an all-fp32 set, or ``--fp16 always`` to convert fp16 on
+an Intel Mac too (where it lands on the GPU and measures slightly slower than
+fp32). No other bundled model survives fp16: the ``v1`` chroma_net series
+overflows its range and the ldzeug2 models break on index math.
+
 Self-Contained Plugin Builds
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 A default build is already self-contained apart from ONNX Runtime: FFTW and
@@ -284,8 +294,14 @@ that directory so delvewheel does not mint an ``__init__.py`` inside it.
 GPU-execution-provider wheels are built the same way with ``-Dep=cuda``,
 ``-Dep=migraphx`` or ``-Dep=directml`` and an ONNX Runtime carrying that
 provider. They are too large for PyPI, so they are retagged with a build tag
-(``--build 0cuda``) to keep them installable while distinguishing them from the
-CPU wheel.
+(``--build 0cuda13``) to keep them installable while distinguishing them from
+the CPU wheel.
+
+``-Dep=cuda`` covers both published CUDA variants: the toolkit major is not a
+build option but a property of the nvcc and the ONNX Runtime package the build
+is pointed at. Our cuFFT kernels and ORT have to agree on ``libcudart``, so a
+12.x toolkit is paired with ORT's ``gpu_cuda12`` package and a 13.x toolkit
+with ``gpu_cuda13``. Only the wheel's build tag distinguishes the results.
 
 ``-Dep=cuda`` and ``-Dep=migraphx`` also switch on libchromadec's native cuFFT
 and hipFFT pipelines, so they need the vendor toolkit at build time — nvcc plus

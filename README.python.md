@@ -66,12 +66,14 @@ when you use the Python module.
 
 The wheel bundles the model weights and whatever shared libraries the plugin
 needs, so **VapourSynth** (>= R55) is the only thing you install alongside it.
-It runs the neural decoders on the CPU (Linux/Windows) or Apple CoreML (macOS);
-GPU-execution-provider wheels are too large for PyPI and are published on
+It runs the neural decoders on the CPU (Linux), on any DirectX 12 GPU via
+DirectML with CPU fallback (Windows), or on Apple CoreML (macOS); the
+CUDA/TensorRT and MIGraphX wheels are too large for PyPI and are published on
 [GitHub Releases](https://github.com/JustinTArthur/vapoursynth-analog/releases)
-instead — CUDA/TensorRT and MIGraphX for Linux, CUDA/TensorRT and DirectML for
-Windows. The CUDA and MIGraphX wheels require a CUDA 12.x or ROCm 7.x
-installation to load at all; the DirectML one does not.
+instead — CUDA/TensorRT for Linux and Windows, MIGraphX for Linux. They
+require a CUDA or ROCm 7.x installation to load at all. CUDA ships as a `0cuda12` and a
+`0cuda13` build, one per toolkit major — pre-Turing cards need `0cuda12`, which
+is as far as NVIDIA's own support for them goes.
 
 Alternatively, obtain or 
 [build](https://vapoursynth-analog.justinarthur.com/en/latest/building.html)

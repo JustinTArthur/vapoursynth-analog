@@ -60,6 +60,7 @@ struct VSAnalog4fscOptions {
     // Neural-network decoders.
     std::string modelPath;         // Resolved model file (.onnx / .mlpackage)
     std::string onnxProvider;      // Execution provider name (empty = default)
+    std::string modelPrecision;    // "", "fp32", or "fp16" (empty = fp32)
     bool modelChromaBandpass = true;
     double modelInputScale = 1.0;
 };
