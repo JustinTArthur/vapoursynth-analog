@@ -6,6 +6,7 @@
 # _NN_DECODERS registry in python/vsanalog/__init__.py. Weights are downloaded
 # and checksum-verified in CI, never committed to the repo.
 #
+nntransform3d/chroma_net-v1-202512.onnx                8bc55b9d5e733d4c459f902bf0e1c996d5946b5698b94c08857c5fdd448f9cb3  https://justinarthur.com/av/analog-decoding/models/nnTransform3D/chroma_net-v1-202512.onnx
 nntransform3d/chroma_net-v1-202603.onnx                6f7c1f9183f508e95d1f8b095d8bedc5137c917b6e60decbbdc2cbc99f4195f8  https://justinarthur.com/av/analog-decoding/models/nnTransform3D/chroma_net-v1-202603.onnx
 nntransform3d/chroma_net-v2-202605.onnx                40c15d91437a56354838394a3955f2e845b276ff1dacc765139381d8dcb89fbe  https://justinarthur.com/av/analog-decoding/models/nnTransform3D/chroma_net-v2-202605.onnx
 ldzeug/color_cnn_1031640.onnx                          ff882e883f8447933fda95f77a396007256f1d057cb5fc6812aeb03c0029d252  https://justinarthur.com/av/analog-decoding/models/ldzeug2/color_cnn_1031640.onnx

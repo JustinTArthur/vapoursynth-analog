@@ -27,10 +27,18 @@ R = TypeVar("R")
 
 
 def _get_plugin_path() -> Path:
-    """Derive the filesystem path of the bundled vsanalog shared library."""
+    """Derive the filesystem path of the bundled vsanalog shared library.
+
+    The plugin lives in its own subdirectory of ``vapoursynth/plugins`` so that
+    its bundled dependencies can sit beside it; ``manifest.vs`` keeps the
+    autoloader from probing those as plugins.
+    """
     suffix = {"Windows": ".dll", "Darwin": ".dylib"}.get(platform.system(), ".so")
     _packages_root = Path(__file__).resolve().parent.parent
-    return _packages_root / "vapoursynth" / "plugins" / f"vsanalog{suffix}"
+    return (
+        _packages_root / "vapoursynth" / "plugins" / "vsanalog"
+        / f"vsanalog{suffix}"
+    )
 
 
 def _ensure_plugin_loaded() -> None:

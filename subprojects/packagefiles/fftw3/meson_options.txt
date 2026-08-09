@@ -1,0 +1,5 @@
+option('simd',
+    type: 'boolean',
+    value: true,
+    description: 'Build the vectorised codelets for the host CPU family.',
+)

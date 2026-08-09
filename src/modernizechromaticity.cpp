@@ -29,7 +29,11 @@
 #if defined(__x86_64__) || defined(_M_X64)
     #define MODERNIZE_X86 1
     #include <immintrin.h>
-    #if defined(_MSC_VER)
+    // clang-cl defines _MSC_VER but keeps Clang's codegen rules: AVX2
+    // intrinsics need the target attribute, and _xgetbv is gated behind the
+    // xsave feature. Only MSVC proper takes the intrin.h path.
+    #if defined(_MSC_VER) && !defined(__clang__)
+        #define MODERNIZE_MSVC 1
         #include <intrin.h>
         #define MODERNIZE_TARGET_AVX2
     #else
@@ -411,7 +415,7 @@ float transferSample(const TransferOp &op, float v) {
 
 // Shared by the transfer and affine kernels below.
 uint64_t xgetbv0() {
-#if defined(_MSC_VER)
+#if defined(MODERNIZE_MSVC)
     return _xgetbv(0);
 #else
     uint32_t eax, edx;
@@ -421,7 +425,7 @@ uint64_t xgetbv0() {
 }
 
 bool cpuHasAvx2Fma() {
-#if defined(_MSC_VER)
+#if defined(MODERNIZE_MSVC)
     int info[4];
     __cpuid(info, 0);
     if (info[0] < 7)

@@ -48,7 +48,8 @@ _MODELS_DIR = Path(__file__).resolve().parent / "models"
 # decoder -> {model_version: (relative .onnx path, nn_input_magnitude_scale)}
 _NN_DECODERS: dict[str, dict[str, tuple[str, float]]] = {
     "nntransform3d": {
-        "v1": ("nntransform3d/chroma_net-v1-202603.onnx", 1.0),
+        "v1_202512": ("nntransform3d/chroma_net-v1-202512.onnx", 1.0),
+        "v1_202603": ("nntransform3d/chroma_net-v1-202603.onnx", 1.0),
         "v2": ("nntransform3d/chroma_net-v2-202605.onnx", 128.0),
     },
     "ldzeug2_color_cnn": {

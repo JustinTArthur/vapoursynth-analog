@@ -99,7 +99,14 @@ Decoding
 
     :param model_version:
         Bundled model to use for a neural-network *decoder* (defaults per
-        decoder). Ignored when *model_path* is given.
+        decoder). Ignored when *model_path* is given. Choices:
+        ``"nntransform3d"``: ``"v1_202512"``, ``"v1_202603"`` (the ``v1``
+        series, predating ``v2``'s larger input-magnitude scale), or
+        ``"v2"`` (default); ``"ldzeug2_color_cnn"``: ``"1031640"``,
+        ``"denoise_613928_ft22k"``, or ``"v2_alot"`` (default);
+        ``"ldzeug2_luma_sep"``: ``"2dgray_fields"`` (default, only choice);
+        ``"ldzeug2_luma_sep_frame"``: ``"2d_frame_gray_gray_run2_latest"``
+        (default, only choice).
     :type model_version: :py:class:`str` | None
 
     :param model_path:

@@ -88,8 +88,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      # No libfftw3-dev on purpose: FFTW comes from the wrap, and this job is
+      # what proves an sdist install needs nothing preinstalled to get it.
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfftw3-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y pkg-config
 
       - name: Provide VapourSynth headers and pkg-config file
         run: |
@@ -137,7 +139,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install dependencies
-        run: brew install meson ninja fftw vapoursynth
+        run: brew install meson ninja vapoursynth
 
       - name: Fetch NN models
         run: python3 tools/fetch_models.py
@@ -160,8 +162,8 @@ jobs:
       - name: Build wheel
         run: |
           pip install delocate wheel build
-          # prefer_static takes Homebrew's libfftw3.a; libchromadec's bundled
-          # SQLite is already static, so only system libraries are left to link.
+          # FFTW and SQLite are already static subprojects; prefer_static keeps
+          # anything else off the shared path, leaving only system libraries.
           pipx run build --wheel -o dist/ -Csetup-args="-Dprefer_static=true"
           delocate-wheel -w wheelhouse/ dist/*.whl
           python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
@@ -227,15 +229,17 @@ jobs:
           docker run --rm \
             -e ORT_VERSION="${ORT_VERSION}" \
             -e ORT_PKG="${{ matrix.ort }}" \
+            -e ARCH="${{ matrix.arch }}" \
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
             -v "${{ github.workspace }}/plugin-out:/out" \
             ${{ matrix.manylinux }} \
             bash -exc '
           PYBIN="/opt/python/cp312-cp312/bin"; export PATH="${PYBIN}:${PATH}"
-          # fftw-static carries the libfftw3.a that fftw-devel does not ship;
-          # SQLite comes from libchromadec bundled overlay, so no sqlite-devel.
-          dnf install -y fftw-devel fftw-static gcc-c++ pkg-config git
+          # No fftw-devel and no sqlite-devel: both come from wraps built into
+          # the plugin. Fedora ships no NEON codelets on aarch64 and no AVX2 on
+          # x86_64, which is the reason FFTW is built here rather than installed.
+          dnf install -y gcc-c++ pkg-config git
 
           # ONNX Runtime (CPU) prebuilt: headers + shared lib.
           curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${ORT_PKG}-${ORT_VERSION}.tgz" -o /tmp/ort.tgz
@@ -263,6 +267,27 @@ jobs:
             -Csetup-args="-Dep=cpu" \
             -Csetup-args="-Dprefer_static=true" \
             -Csetup-args="-Dchromadec:onnxruntime_root=/opt/ort"
+
+          # An x86-64-v3 variant, which VapourSynth loads only on CPUs that
+          # report the matching ABI level. Built with clang rather than the gcc
+          # used above: measured on Zen 4, clang wins clearly once AVX2 is
+          # enabled, but is ~17% SLOWER than gcc on pal2d at the baseline ISA,
+          # so the fallback binary every older CPU gets stays on gcc.
+          # The probe is x86-only, so aarch64 ships a single binary.
+          if [ "${ARCH}" = "x86_64" ]; then
+            dnf install -y clang
+            CC=clang CXX=clang++ meson setup /tmp/bv3 -Dbuild_wheel=false \
+              -Dep=cpu -Dprefer_static=true -Dchromadec:onnxruntime_root=/opt/ort \
+              -Dcpp_args=-march=x86-64-v3 -Dc_args=-march=x86-64-v3
+            meson compile -C /tmp/bv3
+            # Before auditwheel: it renames the vendored libraries and patches
+            # the importing binaries, so a variant added after would still
+            # reference the unmangled sonames.
+            python3 tools/add_cpu_tiers.py /tmp/dist/*.whl /tmp/tiered/ \
+              --tier avx2=/tmp/bv3/vsanalog.so
+            rm -f /tmp/dist/*.whl && mv /tmp/tiered/*.whl /tmp/dist/
+          fi
+
           auditwheel repair -w /wheelhouse/ /tmp/dist/*.whl
           python3 -m wheel tags --python-tag py3 --abi-tag none /wheelhouse/*.whl --remove
 
@@ -328,7 +353,7 @@ jobs:
             quay.io/pypa/manylinux_2_28_x86_64 \
             bash -exc '
           PYBIN="/opt/python/cp312-cp312/bin"; export PATH="${PYBIN}:${PATH}"
-          dnf install -y fftw-devel fftw-static gcc-c++ pkg-config git
+          dnf install -y gcc-c++ pkg-config git
 
           mkdir -p /usr/include/vapoursynth
           curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h -o /usr/include/vapoursynth/VapourSynth4.h
@@ -454,6 +479,19 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Use clang-cl
+        shell: pwsh
+        run: |
+          # MSVC's vectoriser declines libchromadec's decoder loops at every
+          # setting tried (/arch:AVX2, /fp:fast, __restrict); clang-cl takes
+          # them. It needs the MSVC environment above for headers and libs.
+          # FP model is left at the default /fp:precise.
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvm\clang-cl.exe")) { choco install llvm -y --no-progress }
+          "$llvm" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "CC=clang-cl"  | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CXX=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Append
+          & "$llvm\clang-cl.exe" --version
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -461,13 +499,10 @@ jobs:
         run: pip install "meson!=1.11.0" ninja
       - name: Install pkg-config
         run: choco install pkgconfiglite --allow-empty-checksums
-      # SQLite comes from libchromadec's bundled overlay. FFTW is needed both
-      # ways: the DLL build for the wheel (delvewheel vendors it) and the
-      # static-md build for the single-file standalone plugin.
-      - name: Install vcpkg deps
-        run: |
-          vcpkg integrate install
-          vcpkg install fftw3:x64-windows fftw3:x64-windows-static-md
+      # No vcpkg step: FFTW was its only package and now comes from
+      # subprojects/fftw3.wrap, built static with SSE2/AVX/AVX2 codelets, so the
+      # wheel and the standalone plugin share one recipe. SQLite likewise comes
+      # from libchromadec's bundled overlay.
       - name: Fetch NN models
         run: python tools/fetch_models.py
 
@@ -504,24 +539,59 @@ jobs:
       - name: Build wheel
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           pip install delvewheel wheel build
           python -m build --wheel -o dist/ `
             -Csetup-args="-Dep=cpu" `
             -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT"
+
+      # A whole second build at /arch:AVX2. clang-cl vectorises libchromadec's
+      # decoder loops that MSVC declines, but only with the wider ISA enabled —
+      # at the default baseline it is no faster than MSVC. VapourSynth loads
+      # this variant only on CPUs that report the matching ABI level.
+      - name: Build the AVX2 variant
+        shell: pwsh
+        run: |
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
+          meson setup build_avx2 -Dbuild_wheel=false `
+            -Dep=cpu -Dchromadec:onnxruntime_root="$env:ORT_ROOT" `
+            -Dcpp_args=/arch:AVX2 -Dc_args=/arch:AVX2
+          meson compile -C build_avx2
+
+      - name: Repair wheel
+        shell: pwsh
+        run: |
+          # Inject the variant BEFORE delvewheel: it renames the vendored DLLs
+          # and patches the importing binaries, so a variant added afterwards
+          # would still reference the unmangled names and fail to load.
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
-          delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" `
-            --add-path "C:/vcpkg/installed/x64-windows/bin;$env:ORT_ROOT/lib" $wheel -w wheelhouse/
+          python tools/add_cpu_tiers.py $wheel tiered/ --tier avx2=build_avx2/vsanalog.dll
+          $wheel = Get-ChildItem tiered/*.whl | Select-Object -First 1
+          # --namespace-pkg must name the plugin's own directory too, or
+          # delvewheel mints an __init__.py inside it.
+          delvewheel repair --analyze-existing `
+            --namespace-pkg "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog" `
+            --add-path "$env:ORT_ROOT/lib" $wheel -w repaired/
+
+      - name: Co-locate bundled DLLs with the plugin
+        shell: pwsh
+        run: |
+          # delvewheel vendors the dependency DLLs into a top-level
+          # vsanalog.libs/ reachable only via an `import vsanalog` patch, which
+          # VapourSynth's plugin autoloader never runs. Move them next to
+          # vsanalog.dll so the loader resolves them directly.
+          $repaired = Get-ChildItem repaired/*.whl | Select-Object -First 1
+          python tools/colocate_plugin_libs.py $repaired wheelhouse/
           python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
       # Separate from the wheel: delvewheel renames and relocates the DLLs the
-      # wheel's plugin loads, so that copy only works inside the package. This
-      # build takes static FFTW and no ONNX Runtime, leaving a lone DLL that
-      # needs nothing but VapourSynth and the MSVC runtime.
+      # wheel's plugin loads, so that copy only works inside the package. FFTW is
+      # static either way now, so this differs only in dropping ONNX Runtime,
+      # leaving a lone DLL that needs nothing but VapourSynth and the MSVC runtime.
       - name: Build standalone plugin
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;C:/vcpkg/installed/x64-windows-static-md/lib/pkgconfig"
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           meson setup build_tarball -Dbuild_wheel=false -Dep=none -Dprefer_static=true
           meson compile -C build_tarball
 
@@ -570,15 +640,21 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Use clang-cl
+        shell: pwsh
+        run: |
+          # Matches the CPU wheel job; see the note there.
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvm\clang-cl.exe")) { choco install llvm -y --no-progress }
+          "$llvm" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "CC=clang-cl"  | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CXX=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Append
+          & "$llvm\clang-cl.exe" --version
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install "meson!=1.11.0" ninja
       - run: choco install pkgconfiglite --allow-empty-checksums
-      - name: Install vcpkg deps
-        run: |
-          vcpkg integrate install
-          vcpkg install fftw3:x64-windows
 
       # -Dep=cuda maps to with_cuda=enabled, which compiles our own cuFFT
       # kernels and so needs nvcc and the CUDA libraries, not just ORT. Pinned
@@ -648,7 +724,7 @@ jobs:
       - name: Build wheel (${{ matrix.ep }})
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig;C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           pip install delvewheel wheel build
           python -m build --wheel -o dist/ `
             -Csetup-args="-Dep=${{ matrix.ep }}" `
@@ -660,27 +736,52 @@ jobs:
           # may rename them (--no-mangle). DirectML.dll is a redistributable we
           # ship; the CUDA runtime is the user's to install, so it is excluded
           # rather than vendored.
+          #
+          # ext-ms-win-gdi-internal-uap-init-l1-1-0.dll is a Windows API Set: a
+          # virtual name the OS loader resolves itself, never a real file on
+          # disk, so delvewheel's dependency walker can't find it and needs to
+          # be told to stop looking. Every EP hits this, not just DirectML's.
           $addDll = "onnxruntime_providers_shared.dll"
           $noMangle = "onnxruntime_providers_shared.dll"
-          $exclude = ""
+          $exclude = "ext-ms-win-gdi-internal-uap-init-l1-1-0.dll"
           if ("${{ matrix.ep }}" -eq "cuda") {
             $addDll = "$addDll;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
             $noMangle = "$noMangle;onnxruntime_providers_cuda.dll;onnxruntime_providers_tensorrt.dll"
             # --exclude takes glob patterns, so these survive a CUDA minor bump.
-            $exclude = "cudart64_*.dll;cufft64_*.dll;cublas*64_*.dll;cudnn*.dll;nvinfer*.dll"
+            $exclude = "$exclude;cudart64_*.dll;cufft64_*.dll;cublas*64_*.dll;cudnn*.dll;nvinfer*.dll"
           } else {
             $addDll = "$addDll;DirectML.dll"
             $noMangle = "$noMangle;DirectML.dll"
+            # onnxruntime.dll delay-loads these three from D3D12/DXCore/DXGI;
+            # all are genuine OS components (confirmed present in System32),
+            # so exclude rather than vendor. Vendoring them means delvewheel
+            # mangles their names and, to keep DirectML.dll working, patches
+            # its own delay-import table in place — which corrupts it enough
+            # to crash onnxruntime.dll on first use, CPU and DirectML EP alike
+            # (delay-load failure, STATUS_DLL_NOT_FOUND). Excluding them keeps
+            # DirectML.dll byte-identical to the working upstream copy.
+            $exclude = "$exclude;D3D12.dll;DXCore.dll;dxgi.dll"
           }
+          # --namespace-pkg must name the plugin's own directory too, or
+          # delvewheel mints an __init__.py inside it.
           $repairArgs = @(
             "--analyze-existing",
-            "--namespace-pkg", "vapoursynth;vapoursynth.plugins",
+            "--namespace-pkg", "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog",
             "--add-dll", $addDll,
             "--no-mangle", $noMangle,
-            "--add-path", "C:/vcpkg/installed/x64-windows/bin;$env:ORT_EP_DLL_DIR"
+            "--add-path", "$env:ORT_EP_DLL_DIR"
           )
           if ($exclude) { $repairArgs += @("--exclude", $exclude) }
-          delvewheel repair @repairArgs $wheel -w wheelhouse/
+          delvewheel repair @repairArgs $wheel -w repaired/
+
+          # delvewheel vendors the dependency DLLs into a top-level
+          # vsanalog.libs/ reachable only via an `import vsanalog` patch, which
+          # VapourSynth's plugin autoloader never runs. Move them next to
+          # vsanalog.dll so the loader resolves them directly. ORT finds its
+          # execution providers relative to onnxruntime.dll, so they move as a
+          # set and stay together.
+          $repaired = Get-ChildItem repaired/*.whl | Select-Object -First 1
+          python tools/colocate_plugin_libs.py $repaired wheelhouse/
 
           # Build tag (digits first) rather than a "-directml" suffix, which
           # would make the filename unparseable and uninstallable by pip.
@@ -764,10 +865,29 @@ jobs:
           python -c "import glob, tarfile; tarfile.open(glob.glob('tarballs/*.tar.xz')[0]).extractall('tarball_x')"
           python tools/check_standalone_plugin.py tarball_x
 
-      - name: Install wheel and run tests
+      - name: Install wheel
         run: |
           if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
           python -m pip install wheelhouse/*.whl
+
+      # VapourSynth ignores plugins it cannot load, so tests/test_autoload.py
+      # skips rather than fails when the installed wheel's plugin is unusable —
+      # which is how a Windows wheel whose bundled DLLs the autoloader could not
+      # resolve shipped green. This asserts instead. It has to run before
+      # anything imports vsanalog: that import registers the DLL search path and
+      # would mask the very failure being tested.
+      - name: Load check (installed wheel)
+        run: |
+          if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
+          python tools/check_wheel_plugin.py
+
+      - name: Run tests
+        env:
+          # A wheel is installed here, so the layout checks assert rather than
+          # skip the way they do in a source checkout.
+          VSANALOG_CHECK_WHEEL_LAYOUT: '1'
+        run: |
+          if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
           pytest -v tests/
 
   # ---------------------------------------------------------------------------

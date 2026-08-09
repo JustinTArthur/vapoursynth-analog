@@ -29,14 +29,41 @@ Build Dependencies
 - C++20 compiler (GCC 10+, Clang 12+, or MSVC 2019+)
 - ``git``, for the libchromadec wrap
 - `VapourSynth <https://www.vapoursynth.com/>`_ (>= R55) development headers
-- `FFTW3 <http://www.fftw.org/>`_, for the Transform PAL decoders. Without it
-  the build succeeds and those decoders are simply absent; ``meson setup``
-  reports ``FFTW3 (Transform-PAL)`` in libchromadec's feature summary.
 
-SQLite is *not* a build dependency: libchromadec ships a trimmed amalgamation
-that this project always builds against (``force_fallback_for=sqlite3`` in
-``meson.build``), so the plugin reads ``.db`` metadata sidecars without linking
-a system libsqlite3. Qt is no longer used at all.
+Neither FFTW3 nor SQLite is a build dependency. Both are built from source and
+linked statically into the plugin, via ``force_fallback_for=sqlite3,fftw3`` in
+``meson.build``: SQLite from the trimmed amalgamation libchromadec ships, and
+`FFTW3 <http://www.fftw.org/>`_ from ``subprojects/fftw3.wrap``, which downloads
+the upstream tarball and builds it with the Meson port in
+``subprojects/packagefiles/fftw3/``. Qt is no longer used at all.
+
+Building FFTW rather than installing it is partly a performance decision and
+partly a correctness one. The packaged builds ship the wrong codelets for several
+targets: Homebrew and Fedora both produce a scalar-only aarch64 FFTW, and
+Fedora's x86_64 build has no AVX2/FMA. The 3D decoders (``transform3d``,
+``nntransform3d``) spend most of their time in FFTW, and the payoff tracks vector
+width — roughly 17% on the arm64 targets, which go from scalar to 128-bit NEON,
+but only about 1% on x86_64, where AVX to AVX2 is no change in width. The 2D path
+is far less sensitive either way. On x86_64 the wrap therefore earns its place
+through uniformity and through building at all where no FFTW is installed, rather
+than through speed. The port enables SSE2/AVX/AVX2
+on x86 (FFTW dispatches between them at plan time, so this stays safe on older
+CPUs) and NEON on aarch64. SVE is deliberately left off: FFTW selects ARM
+codelets at compile time with no runtime dispatch, so an SVE build would not run
+on hardware without it.
+
+To link system copies instead — the usual choice when packaging for a distro —
+pass ``-Dforce_fallback_for=``, optionally with ``--wrap-mode=nodownload``::
+
+    meson setup build -Dforce_fallback_for= --wrap-mode=nodownload
+
+That needs FFTW3 and SQLite3 development packages installed — both really are
+required. libchromadec declares FFTW optional and reports it as
+``FFTW3 (Transform-PAL)`` in its feature summary, but that gate only selects the
+``CHD_WITH_FFTW`` feature flag: ``palcolour.h`` includes ``transform_pal.h``, and
+so ``<fftw3.h>``, unconditionally, and every build pulls that in through
+``decoders/registry.cpp``. With no FFTW headers present the build fails outright
+rather than dropping the Transform PAL decoders.
 
 The neural-network decoders need a backend, selected by the ``ep``
 (execution provider) option — see `Neural-Network Backends`_ below. On macOS
@@ -50,28 +77,25 @@ Installing Build Dependencies
 
 .. code-block:: bash
 
-    brew install meson ninja fftw vapoursynth
+    brew install meson ninja vapoursynth
 
 **Ubuntu/Debian:**
 
 .. code-block:: bash
 
-    sudo apt install meson ninja-build build-essential git libfftw3-dev vapoursynth-dev
+    sudo apt install meson ninja-build build-essential git vapoursynth-dev
 
 **Fedora:**
 
 .. code-block:: bash
 
-    sudo dnf install meson ninja-build gcc-c++ git fftw-devel vapoursynth-devel
-
-Add ``fftw-static`` if you want FFTW linked statically (see
-`Self-Contained Plugin Builds`_).
+    sudo dnf install meson ninja-build gcc-c++ git vapoursynth-devel
 
 **Arch Linux:**
 
 .. code-block:: bash
 
-    sudo pacman -S meson ninja base-devel git fftw vapoursynth
+    sudo pacman -S meson ninja base-devel git vapoursynth
 
 Compiling the Plugin
 ~~~~~~~~~~~~~~~~~~~~
@@ -115,10 +139,10 @@ downloads and checksum-verifies the same weights from ``tools/models.lock``.
 
 Self-Contained Plugin Builds
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-A plain build links FFTW dynamically, so the plugin you copy elsewhere needs
-the FFTW shared library on the target machine. Adding ``-Dprefer_static=true``
-takes the static archives instead where they exist, which is what the release
-tarballs are built with:
+A default build is already self-contained apart from ONNX Runtime: FFTW and
+SQLite are static subprojects absorbed into the plugin. ``-Dprefer_static=true``
+takes the static archive of anything else that offers one, which is what the
+release tarballs are built with:
 
 .. code-block:: bash
 
@@ -126,9 +150,7 @@ tarballs are built with:
     meson compile -C build
 
 The result depends on nothing outside the C++ runtime, VapourSynth, and — on
-macOS — the system CoreML frameworks. This needs a static FFTW to be installed
-(``libfftw3.a``: Homebrew's ``fftw`` includes it, Fedora/RHEL split it into an
-``fftw-static`` package, Debian/Ubuntu ship it in ``libfftw3-dev``).
+macOS — the system CoreML frameworks.
 
 Installing the Plugin
 ~~~~~~~~~~~~~~~~~~~~~
@@ -176,8 +198,8 @@ An sdist bundles this project's own source and is platform independent:
 
     python -m build --sdist
 
-It carries the libchromadec wrap rather than libchromadec itself, so building
-from it fetches the subproject over the network. It carries no model weights
+It carries the libchromadec and FFTW wraps rather than their sources, so
+building from it fetches both over the network. It carries no model weights
 either: install from an sdist and the neural-network decoders need models you
 supply yourself.
 
@@ -188,9 +210,9 @@ Wheel
 ~~~~~
 Building a wheel compiles the native plugin, so the same build dependencies
 listed above must be available. Whatever shared libraries the plugin ended up
-linking (ONNX Runtime, and FFTW unless it was linked statically) are not
-present on end-user machines, so the platform-appropriate repair tool vendors
-them into the wheel.
+linking (in practice only ONNX Runtime — FFTW and SQLite are static
+subprojects) are not present on end-user machines, so the platform-appropriate
+repair tool vendors them into the wheel.
 
 After repair, the wheels are re-tagged as ``py3-none`` because the plugin does
 not embed CPython's ABI:
@@ -208,7 +230,7 @@ not embed CPython's ABI:
     delocate-wheel -w wheelhouse/ dist/*.whl
     python -m wheel tags --python-tag py3 --abi-tag none wheelhouse/*.whl --remove
 
-``PKG_CONFIG_PATH`` should resolve ``vapoursynth.pc`` and ``fftw3.pc`` —
+``PKG_CONFIG_PATH`` should resolve ``vapoursynth.pc`` —
 ``/opt/homebrew/lib/pkgconfig`` on Apple silicon.
 
 **Linux (manylinux):**
@@ -216,8 +238,8 @@ not embed CPython's ABI:
 Linux wheels are built inside a ``quay.io/pypa/manylinux_2_28_x86_64`` (or
 ``manylinux_2_34_aarch64``) container so that the resulting binaries are
 compatible with older glibc versions. Inside the container, install the build
-dependencies (``fftw-devel``, ``fftw-static``, ``gcc-c++``, ``git``, an
-unpacked ONNX Runtime, and the VapourSynth headers), then:
+dependencies (``gcc-c++``, ``git``, an unpacked ONNX Runtime, and the
+VapourSynth headers), then:
 
 .. code-block:: bash
 
@@ -233,9 +255,8 @@ See ``.github/workflows/build.yml`` for the full container setup used in CI.
 
 **Windows:**
 
-Windows wheels need an MSVC developer environment, vcpkg-provided FFTW3, and an
-unpacked ONNX Runtime. ``delvewheel`` vendors the DLLs from vcpkg's installed
-tree and the ONNX Runtime directory:
+Windows wheels need an MSVC developer environment and an unpacked ONNX
+Runtime. ``delvewheel`` vendors the DLLs from the ONNX Runtime directory:
 
 .. code-block:: powershell
 
@@ -243,13 +264,22 @@ tree and the ONNX Runtime directory:
     python -m build --wheel -o dist/ `
         -Csetup-args="-Dep=cpu" `
         -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT"
-    delvewheel repair --analyze-existing --namespace-pkg "vapoursynth;vapoursynth.plugins" `
-        --add-path "C:/vcpkg/installed/x64-windows/bin;$env:ORT_ROOT/lib" `
-        dist/*.whl -w wheelhouse/
+    delvewheel repair --analyze-existing `
+        --namespace-pkg "vapoursynth;vapoursynth.plugins;vapoursynth.plugins.vsanalog" `
+        --add-path "$env:ORT_ROOT/lib" `
+        dist/*.whl -w repaired/
+    python tools/colocate_plugin_libs.py (Get-ChildItem repaired/*.whl) wheelhouse/
     python -m wheel tags --python-tag py3 --abi-tag none (Get-ChildItem wheelhouse/*.whl) --remove
 
-As on other platforms, ``PKG_CONFIG_PATH`` must resolve ``vapoursynth.pc`` and
-``fftw3.pc`` before invoking the build.
+As on other platforms, ``PKG_CONFIG_PATH`` must resolve ``vapoursynth.pc``
+before invoking the build.
+
+The extra ``colocate_plugin_libs.py`` pass is what makes the plugin autoload.
+delvewheel puts the vendored DLLs in a top-level ``vsanalog.libs/`` reachable
+only through a patch that runs on ``import vsanalog``, which VapourSynth's
+autoloader never does; the script moves them into the plugin's own directory,
+where the loader finds them unaided. The last ``--namespace-pkg`` entry names
+that directory so delvewheel does not mint an ``__init__.py`` inside it.
 
 GPU-execution-provider wheels are built the same way with ``-Dep=cuda``,
 ``-Dep=migraphx`` or ``-Dep=directml`` and an ONNX Runtime carrying that

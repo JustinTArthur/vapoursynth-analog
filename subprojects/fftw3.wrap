@@ -1,0 +1,13 @@
+[wrap-file]
+directory = fftw-3.3.11
+source_url = https://www.fftw.org/fftw-3.3.11.tar.gz
+source_filename = fftw-3.3.11.tar.gz
+source_hash = 5630c24cdeb33b131612f7eb4b1a9934234754f9f388ff8617458d0be6f239a1
+patch_directory = fftw3
+
+# Upstream ships no Meson build; packagefiles/fftw3/ overlays one that compiles
+# the tarball's pre-generated codelets with the SIMD flags the off-the-shelf
+# packages miss (NEON on aarch64, AVX2/FMA on x86_64). libchromadec asks for
+# `fftw3`, and force_fallback_for in the root meson.build routes it here.
+[provide]
+dependency_names = fftw3

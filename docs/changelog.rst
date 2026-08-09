@@ -140,6 +140,25 @@ Changelog
   (``debug``, ``info``, ``warning``, ``critical`` or ``off``). Failures are
   unaffected — they still raise, and now carry the specific complaint from the
   layer that found it rather than a generic summary.
+- FFTW is now built from source as a Meson subproject rather than taken from the
+  platform package, because the packaged builds ship the wrong codelets on
+  several targets — most importantly, both Homebrew and Fedora produce a
+  scalar-only aarch64 FFTW. The gain is concentrated in the 3D decoders, which
+  spend most of their time in FFTW, and tracks SIMD vector width: ``transform3d``
+  decodes about 17% faster on both arm64 targets (scalar to 128-bit NEON) and
+  about 1% faster on x86_64 Linux (256-bit AVX to 256-bit AVX2, no width change).
+  ``transform2d`` moves only a few percent anywhere. Output is numerically
+  unchanged. On x86_64 the wrap is kept for uniformity and for the build fix
+  below rather than for speed. FFTW is also no longer a build dependency, which
+  fixes installing from an sdist on a machine that has no FFTW: that used to fail
+  the compile outright,
+  because libchromadec includes ``<fftw3.h>`` unconditionally despite declaring
+  the dependency optional. Pass ``-Dforce_fallback_for=`` to link a system copy
+  instead.
+- Fixed the Windows wheel's plugin failing VapourSynth's autoload, which left
+  ``core.analog`` unavailable to scripts that had not imported ``vsanalog``
+  first. Its bundled dependency DLLs were reachable only through a search path
+  that the ``vsanalog`` import registers and the autoloader never runs.
 
 0.2.3
 -----

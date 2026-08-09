@@ -4,3 +4,9 @@
 !/*.wrap
 !/.gitignore
 !/packagefiles/
+
+# Meson writes this redirect here on every configure, because the SQLite wrap it
+# picks lives in libchromadec's own subprojects/ rather than this directory. It
+# is generated output, and committing it breaks the sdist: the redirect target
+# is a subproject source file, which `meson dist` does not ship.
+/sqlite3.wrap

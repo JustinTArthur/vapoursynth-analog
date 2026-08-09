@@ -12,8 +12,18 @@ project('vapoursynth-analog', 'cpp',
         # amalgamation it folds into its own archive) over a system libsqlite3,
         # so the plugin needs no SQLite installed: a system copy would be a
         # load-time dependency whether or not a `.db` metadata sidecar is ever
-        # opened. Pass -Dforce_fallback_for= to link a system SQLite instead.
-        'force_fallback_for=sqlite3',
+        # opened.
+        #
+        # FFTW likewise comes from subprojects/fftw3.wrap rather than the
+        # platform package, because the off-the-shelf builds ship the wrong
+        # codelets: Homebrew and Fedora build aarch64 FFTW with no NEON at all,
+        # and Fedora's x86_64 build has no AVX2/FMA. Transform-PAL and
+        # nnTransform3D are FFTW-bound, so those codelets set their frame rate.
+        # It also means an sdist install no longer silently loses Transform-PAL
+        # on a machine with no FFTW installed.
+        #
+        # Pass -Dforce_fallback_for= to link the system copies instead.
+        'force_fallback_for=sqlite3,fftw3',
     ]
 )
 
@@ -131,12 +141,17 @@ else
                           + meson.current_source_dir() / 'src/vsanalog.map']
 endif
 
-# When building as a wheel, install to vapoursynth/plugins/ in site-packages
-# so the plugin is auto-loaded by VapourSynth's site-packages plugin discovery.
-# Otherwise, install to VapourSynth's system plugin directory via pkg-config.
+# When building as a wheel, install into a dedicated subdirectory of
+# vapoursynth/plugins/ in site-packages, alongside a manifest.vs. VapourSynth
+# honours a manifest in a plugin subdirectory and loads only the plugin it
+# names, so the autoloader never probes the co-bundled dependency DLLs. This
+# needs VapourSynth R74 or newer; below that the wrapper's explicit LoadPlugin
+# still works, but the plugin no longer autoloads. Outside a wheel, install to
+# VapourSynth's system plugin directory via pkg-config.
 if get_option('build_wheel')
     py = import('python').find_installation(pure: false)
-    plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins'
+    plugin_install_dir = py.get_install_dir() / 'vapoursynth' / 'plugins' / 'vsanalog'
+    install_data('manifest.vs', install_dir: plugin_install_dir)
     subdir('python/vsanalog')
 else
     # Newer, Python-oriented VapourSynth drops libdir from its pkg-config file
