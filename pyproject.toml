@@ -22,3 +22,15 @@ setup = ["-Dbuild_wheel=true"]
 # libchromadec is a static subproject absorbed into the plugin; don't install
 # its archive/headers/pkgconfig into the wheel (meson-python can't map them).
 install = ["--skip-subprojects"]
+
+# PEP 817 wheel-variant metadata for the GPU wheels published under the
+# site's simple/ tree (see tools/publish_index.py). Only the CUDA builds are
+# expressed as variants: no AMD/ROCm provider exists yet, so the MIGraphX
+# wheel is served through its family index alone.
+[variant.default-priorities]
+namespace = ["nvidia"]
+
+[variant.providers.nvidia]
+requires = ["nvidia-variant-provider>=0.0.1,<1.0.0"]
+enable-if = "platform_system == 'Linux' or platform_system == 'Windows'"
+plugin-api = "nvidia_variant_provider.plugin:NvidiaVariantPlugin"

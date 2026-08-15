@@ -25,7 +25,7 @@ model.
 GPU-Accelerated Neural Decoding
 -------------------------------
 Wheels carrying a GPU execution provider are too large for PyPI and are
-published separately, on the project's GitHub Releases or download site:
+published on the project's own package index, ``https://py.justinarthur.com``:
 
 - **Linux:** CUDA/TensorRT (Nvidia), MIGraphX (AMD)
 - **Windows:** CUDA/TensorRT (Nvidia)
@@ -33,19 +33,35 @@ published separately, on the project's GitHub Releases or download site:
 DirectML needs no separate wheel: the PyPI Windows wheel bundles the
 DML-capable Windows ML engine and drives any DX12 GPU on its own.
 
-CUDA comes in two builds, ``0cuda12`` and ``0cuda13``, one per toolkit major.
-Pick the one matching the CUDA runtime you have installed; if you have neither,
-take ``0cuda13`` unless your card is older than Turing (GTX 16-series / RTX
-20-series), since CUDA 13 dropped support for Maxwell, Pascal and Volta.
-
-Install one over the plain wheel by URL:
+The index is organised as one *channel* per vendor runtime. Add the channel
+for yours as an extra index and install as usual — pip prefers the channel's
+wheel over the PyPI one for the same version:
 
 .. code-block:: bash
 
-    pip install https://.../vsanalog-<version>-0cuda13-py3-none-manylinux_2_28_x86_64.whl
+    # CUDA 13 (Turing and newer; the CUDA 13 build is the default choice)
+    pip install vsanalog --extra-index-url https://py.justinarthur.com/cu13/
 
-They provide the same functions as the PyPI wheel; the extra provider is
-selected with the ``onnx_provider`` argument (or left to ``auto``).
+    # CUDA 12 (needed for cards older than Turing: Maxwell, Pascal, Volta)
+    pip install vsanalog --extra-index-url https://py.justinarthur.com/cu12/
+
+    # MIGraphX on ROCm 7.x
+    pip install vsanalog --extra-index-url https://py.justinarthur.com/rocm7/
+
+CUDA comes in two builds because the wheel's toolkit major has to match the
+CUDA runtime it finds; take ``cu13`` unless your card is older than Turing
+(GTX 16-series / RTX 20-series), since CUDA 13 dropped support for Maxwell,
+Pascal and Volta. The channels hold Linux and Windows wheels alike; pip picks
+the one for your platform. Keep the ``--extra-index-url`` (or set
+``PIP_EXTRA_INDEX_URL``, or a ``[[tool.uv.index]]`` entry) for upgrades too,
+otherwise ``pip install --upgrade`` finds only the PyPI wheel and replaces the
+GPU one.
+
+The channel wheels provide the same functions as the PyPI wheel; the extra
+provider is selected with the ``onnx_provider`` argument (or left to
+``auto``). Each wheel is also linked directly from its channel page, and its
+name carries the build tag — ``0cuda12``, ``0cuda13``, ``0migraphx`` — if you
+prefer to fetch by URL.
 
 .. warning::
 
@@ -55,13 +71,13 @@ selected with the ``onnx_provider`` argument (or left to ``auto``).
    decoders down with it, not just the neural-network ones. The requirement is
    on the major version, not an exact release:
 
-   - ``0cuda12`` wheels need a CUDA 12.x runtime (``libcudart.so.12``,
+   - ``cu12`` wheels need a CUDA 12.x runtime (``libcudart.so.12``,
      ``libcufft.so.11``).
-   - ``0cuda13`` wheels need a CUDA 13.x runtime (``libcudart.so.13``,
+   - ``cu13`` wheels need a CUDA 13.x runtime (``libcudart.so.13``,
      ``libcufft.so.12`` — cuFFT carries its own version, one behind the
      toolkit's).
-   - MIGraphX wheels need a ROCm 7.x installation (``libamdhip64.so.7``,
-     ``libhipfft.so.0``).
+   - ``rocm7`` (MIGraphX) wheels need a ROCm 7.x installation
+     (``libamdhip64.so.7``, ``libhipfft.so.0``).
 
    The PyPI wheels have no such requirement — on Windows that includes
    DirectML, which drives inference through ONNX Runtime alone and falls back
@@ -77,13 +93,13 @@ declares the matching packages as extras, so the install is one line:
 .. code-block:: bash
 
     # CUDA runtime from PyPI, pinned to the wheel's toolkit major:
-    pip install "vsanalog[cuda] @ https://.../vsanalog-<version>-0cuda13-py3-none-manylinux_2_28_x86_64.whl"
+    pip install "vsanalog[cuda]" --extra-index-url https://py.justinarthur.com/cu13/
 
     # The same plus TensorRT (see the note below):
-    pip install "vsanalog[tensorrt] @ https://.../vsanalog-<version>-0cuda13-py3-none-manylinux_2_28_x86_64.whl"
+    pip install "vsanalog[tensorrt]" --extra-index-url https://py.justinarthur.com/cu13/
 
-The extras differ per wheel — a ``0cuda12`` wheel pins the ``-cu12`` package
-names, a ``0cuda13`` wheel the CUDA 13 ones — so there is nothing to spell by
+The extras differ per channel — a ``cu12`` wheel pins the ``-cu12`` package
+names, a ``cu13`` wheel the CUDA 13 ones — so there is nothing to spell by
 hand; installing the wheel without an extra keeps today's behaviour of
 supplying the runtime yourself.
 
@@ -136,6 +152,28 @@ reported on the VapourSynth log, visible through ``core.add_log_handler()``.
    Both caches are per-user and survive across runs, so this is a one-time cost
    per machine and GPU architecture, not per session. Wiping either one, or
    moving to a different GPU generation, pays it again.
+
+Wheel Variants (PEP 817)
+~~~~~~~~~~~~~~~~~~~~~~~~
+The index also publishes the CUDA wheels as `PEP 817 wheel variants
+<https://peps.python.org/pep-0817/>`_ under a single tree,
+``https://py.justinarthur.com/simple/``. An installer that understands
+variants queries the NVIDIA driver itself and picks the ``cuda13`` or
+``cuda12`` build without you naming a channel:
+
+.. code-block:: bash
+
+    uv pip install vsanalog --extra-index-url https://py.justinarthur.com/simple/
+
+The proposal is still a draft; today only experimental installers (such as
+Astral's variant-enabled ``uv`` build) do this, and they need the
+``nvidia-variant-provider`` plugin available on an index. Everything else
+skips the labelled wheels and falls back to PyPI's, so pointing an ordinary
+pip at ``simple/`` is harmless but gets you the CPU wheel — use a channel
+instead. Note that ``uv``'s default index strategy stops at the first index
+that lists a project, so on a machine with no NVIDIA driver it reports no
+compatible version rather than falling back to PyPI; pass
+``--index-strategy unsafe-best-match`` or use a channel.
 
 Manual Plugin Installation
 --------------------------

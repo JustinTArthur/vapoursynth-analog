@@ -90,18 +90,18 @@ neural decoding through them takes a `model_path` you supply.
 The PyPI wheels run neural decoders on CPU (Linux), on any DX12 GPU via
 DirectML with CPU fallback (Windows), or on Apple CoreML (macOS). The
 remaining GPU-execution-provider wheels are too large for PyPI and are
-published separately (on GitHub Releases, or the project download site when
-they exceed the Release asset size limit): CUDA/TensorRT (Nvidia) for Linux
-and Windows, and MIGraphX (AMD) for Linux. Install the matching wheel with
-`pip install <url>`.
-
-The CUDA and MIGraphX wheels carry a device-resident FFT pipeline linked
-against the vendor runtime, so they **require** a CUDA or ROCm 7.x installation
-— without it the plugin does not load at all, taking the ordinary composite
-decoders with it. CUDA ships as two builds, `0cuda12` and `0cuda13`, matching
-the toolkit major you have installed; note that CUDA 13 dropped support for
-Maxwell, Pascal and Volta cards, so anything older than Turing needs `0cuda12`.
-The PyPI wheels have no such requirement.
+published on the project's own package index, one channel per vendor runtime:
+CUDA/TensorRT (Nvidia) for Linux and Windows, MIGraphX (AMD) for
+Linux. Add the channel for yours as an extra index:
+```sh
+pip install vsanalog --extra-index-url https://py.justinarthur.com/cu13/   # CUDA 13
+pip install vsanalog --extra-index-url https://py.justinarthur.com/cu12/   # CUDA 12 (pre-Turing cards)
+pip install vsanalog --extra-index-url https://py.justinarthur.com/rocm7/  # MIGraphX on ROCm 7
+```
+`vsanalog[tensorrt]` on a CUDA channel pulls in the matching
+CUDA and TensorRT libraries from PyPI as a convenience. These would be needed
+if you didn't already have them installed environment-wide. See the
+[installation guide](https://vapoursynth-analog.justinarthur.com/en/latest/installation.html) for details.
 
 ## Implementation Notes
 Signal decoding functionality comes from
@@ -115,9 +115,8 @@ readers, dropout masks and corrections, and the neural-network decoders.
 To ease legal distribution, this project is available under the GPL 3 license
 (or a compatible one), matching libchromadec.
 
-Machine learning (Claude Opus 4.5 model) was heavily leveraged in the early
-development of this plugin to reduce the tedium of gluing the various
-components together.
+Machine learning models have been employed at times in the development of this
+plugin.
 
 ## Alternatives
 * jsaowji’s [ldzeug2](https://github.com/jsaowji/ldzeug2) is an excellent

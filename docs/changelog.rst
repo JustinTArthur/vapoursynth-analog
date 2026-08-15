@@ -56,8 +56,10 @@ Changelog
   with bundled models, ``onnx_provider`` execution-provider selection, and
   graceful CPU fallback. macOS runs them on native CoreML — the Neural Engine
   on Apple silicon — and the Windows wheel on any DirectX 12 GPU through
-  DirectML; separately published GPU wheels add Nvidia CUDA/TensorRT (Linux,
-  Windows) and AMD MIGraphX (Linux). See :doc:`installation`.
+  DirectML; GPU wheels published on the project's package index — one
+  ``--extra-index-url`` channel per vendor runtime at
+  ``https://py.justinarthur.com`` — add Nvidia CUDA/TensorRT (Linux, Windows)
+  and AMD MIGraphX (Linux). See :doc:`installation`.
 - Read the newer CVBS capture format (``.cvbs``, or ``.cvbsy``/``.cvbsc`` for
   separated luma/chroma, plus the pre-1.5.0 ``.composite`` and ``.y``/``.c``
   spellings) in addition to ld-decode/vhs-decode ``.tbc``, selected by file
