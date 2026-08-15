@@ -124,7 +124,7 @@ void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
         overridePtr = &override;
     }
 
-    // Open (libchromadec detects .tbc vs CVBS .composite/.y/.c by extension).
+    // Open (libchromadec detects .tbc vs CVBS .cvbs/.cvbsy/.cvbsc by extension).
     const bool dual = (chromaSourcePath != nullptr);
     if (dual) {
         src->openYC(sourcePath, *chromaSourcePath, overridePtr);
@@ -274,9 +274,6 @@ void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
     src->setOptI32(CHD_OPT_THREAD_COUNT, 0);
     src->setOptBool(CHD_OPT_REVERSE_FIELD_ORDER, opts->reverseFields);
     src->setOptBool(CHD_OPT_PHASE_COMPENSATION, opts->phaseCompensation);
-    if (!opts->chromaFilter.empty()) {
-        src->setOptStr(CHD_OPT_CHROMA_FILTER, opts->chromaFilter.c_str());
-    }
     if (!opts->colorDiffPrecision.empty()) {
         src->setOptStr(CHD_OPT_COLOR_DIFFERENCE_PRECISION,
                        opts->colorDiffPrecision.c_str());

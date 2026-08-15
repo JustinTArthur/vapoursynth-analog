@@ -16,7 +16,7 @@ The primary function provided by the high-level API is
 signals to digital video clips. It reads time-base-corrected captures from
 [ld-decode](https://github.com/happycube/ld-decode) and
 [vhs-decode](https://github.com/oyvindln/vhs-decode) (`.tbc`) as well as the
-newer CVBS format (`.composite`, or `.y`/`.c` for separated luma/chroma),
+newer CVBS format (`.cvbs`, or `.cvbsy`/`.cvbsc` for separated luma/chroma),
 detected by file extension. It returns 32-bit float clips: `YUV444PS` (default),
 `RGBS` (`color_family="rgb"`), `GRAYS` (`color_family="gray"`), or `YUV440PS`
 for SECAM. NTSC (Comb), PAL (Transform/PalColour), SECAM, and neural-network

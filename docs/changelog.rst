@@ -58,13 +58,14 @@ Changelog
   on Apple silicon — and the Windows wheel on any DirectX 12 GPU through
   DirectML; separately published GPU wheels add Nvidia CUDA/TensorRT (Linux,
   Windows) and AMD MIGraphX (Linux). See :doc:`installation`.
-- Read the newer CVBS capture format (``.composite``, or ``.y``/``.c`` for
-  separated luma/chroma) in addition to ld-decode/vhs-decode ``.tbc``, selected
-  by file extension. RAW (unscaled-ADC) CVBS encodings are rejected.
+- Read the newer CVBS capture format (``.cvbs``, or ``.cvbsy``/``.cvbsc`` for
+  separated luma/chroma, plus the pre-1.5.0 ``.composite`` and ``.y``/``.c``
+  spellings) in addition to ld-decode/vhs-decode ``.tbc``, selected by file
+  extension. RAW (unscaled-ADC) CVBS encodings are rejected.
 - Added ``color_family`` to select ``YUV444PS`` (default), ``RGBS``, or
   ``GRAYS`` float output.
-- Added ``chroma_filter``, ``model_precision``, ``color_difference_precision``
-  and ``broadcast_scaling_precision`` options.
+- Added ``model_precision``, ``color_difference_precision`` and
+  ``broadcast_scaling_precision`` options.
 - Output geometry now follows the interface standards instead of the source's
   declared crop, so a video system always decodes to the same raster. NTSC and
   PAL-M give **768x486** (SMPTE ST 244's digital active line, ST 170's active

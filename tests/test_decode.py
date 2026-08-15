@@ -88,10 +88,9 @@ def test_upside_down_line_range_rejected(ntsc_tbc):
         )
 
 
-def test_precision_and_filter_passthrough(ntsc_tbc):
+def test_precision_passthrough(ntsc_tbc):
     clip = vsanalog.decode_4fsc_video(
         str(ntsc_tbc),
-        chroma_filter="equiband",
         color_difference_precision="classic",
         broadcast_scaling_precision="modern",
     )

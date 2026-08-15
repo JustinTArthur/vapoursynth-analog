@@ -16,7 +16,8 @@ import vsanalog
 def test_signature_has_new_kwargs():
     params = inspect.signature(vsanalog.decode_4fsc_video).parameters
     for name in (
-        "color_family", "chroma_filter", "color_difference_precision",
+        "color_family",
+        "color_difference_precision",
         "broadcast_scaling_precision", "model_version", "model_path",
         "model_input_scale", "model_precision", "onnx_provider",
         "model_chroma_bandpass",
@@ -51,7 +52,6 @@ def test_negative_sample_bounds_accepted(kwarg):
 
 @pytest.mark.parametrize("kwarg,value", [
     ("color_family", "banana"),
-    ("chroma_filter", "nope"),
     ("color_difference_precision", "ultra"),
     ("broadcast_scaling_precision", "ultra"),
 ])

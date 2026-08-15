@@ -13,7 +13,6 @@ Decoding
         *, \
         decoder=None, \
         color_family=None, \
-        chroma_filter=None, \
         color_difference_precision=None, \
         broadcast_scaling_precision=None, \
         model_version=None, \
@@ -46,9 +45,10 @@ Decoding
     `vhs-decode <https://github.com/oyvindln/vhs-decode>`_. These files
     normally have a ``.tbc`` extension indicating they are time-base-corrected
     and must have a metadata sidecar file in JSON or SQLite format. The newer
-    CVBS format is also read, detected by extension: ``.composite`` for
-    composite, or ``.y``/``.c`` for separated luma/chroma (with a ``.meta``
-    sidecar). RAW (unscaled-ADC) CVBS encodings are not supported.
+    CVBS format is also read, detected by extension: ``.cvbs`` for composite,
+    or ``.cvbsy``/``.cvbsc`` for separated luma/chroma (with a ``.meta``
+    sidecar); the pre-1.5.0 ``.composite`` and ``.y``/``.c`` spellings are
+    still accepted. RAW (unscaled-ADC) CVBS encodings are not supported.
 
     Returns a 32-bit float clip whose format depends on *color_family*:
     ``YUV444PS`` (default), ``RGBS``, or ``GRAYS``. SECAM decodes to
@@ -81,12 +81,6 @@ Decoding
         SECAM), ``"rgb"`` (``RGBS``; not available for SECAM), or ``"gray"``
         (``GRAYS`` luma only).
     :type color_family: :py:class:`str` | None
-
-    :param chroma_filter:
-        Chroma bandpass/notch selection: ``"compat"``, ``"equiband_wide"``,
-        ``"equiband"``, ``"color_under"``, ``"wideband_i_ssb"``, or
-        ``"equiband_vsb"``. When *None*, the decoder default is used.
-    :type chroma_filter: :py:class:`str` | None
 
     :param color_difference_precision:
         Color-difference matrix precision: ``"classic"`` or ``"modern"``.

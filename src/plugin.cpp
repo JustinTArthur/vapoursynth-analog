@@ -484,7 +484,6 @@ static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *
         VSAnalog4fscOptions Opts;
         Opts.decoder = getOptString(In, "decoder", vsapi);
         Opts.colorFamily = getOptString(In, "color_family", vsapi);
-        Opts.chromaFilter = getOptString(In, "chroma_filter", vsapi);
         Opts.colorDiffPrecision = getOptString(In, "color_difference_precision", vsapi);
         Opts.broadcastScalingPrecision = getOptString(In, "broadcast_scaling_precision", vsapi);
 
@@ -645,7 +644,6 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "pr_source:data:opt;"
         "decoder:data:opt;"
         "color_family:data:opt;"
-        "chroma_filter:data:opt;"
         "color_difference_precision:data:opt;"
         "broadcast_scaling_precision:data:opt;"
         "reverse_fields:int:opt;"

@@ -43,10 +43,6 @@ except PackageNotFoundError:
 
 # --- Output / color-science option value sets (validated before pass-through) ---
 _COLOR_FAMILIES = {"yuv", "rgb", "gray"}
-_CHROMA_FILTERS = {
-    "compat", "equiband_wide", "equiband",
-    "color_under", "wideband_i_ssb", "equiband_vsb",
-}
 _COLOR_DIFF_PRECISIONS = {"classic", "modern"}
 _BROADCAST_SCALING_PRECISIONS = {"classic", "modern", "scientific"}
 
@@ -194,7 +190,6 @@ def decode_4fsc_video(
     *,
     decoder: str | None = None,
     color_family: str | None = None,
-    chroma_filter: str | None = None,
     color_difference_precision: str | None = None,
     broadcast_scaling_precision: str | None = None,
     model_version: str | None = None,
@@ -223,15 +218,15 @@ def decode_4fsc_video(
     """Decode 4𝑓𝑠𝑐 (four times subcarrier frequency) digitized analog video.
 
     Reads time-base-corrected (TBC) captures produced by ld-decode / vhs-decode
-    (``.tbc``) or the newer CVBS format (``.composite`` composite, ``.y``/``.c``
-    luma/chroma) and returns a 32-bit float VapourSynth clip.
+    (``.tbc``) or the newer CVBS format (``.cvbs`` composite,
+    ``.cvbsy``/``.cvbsc`` luma/chroma) and returns a 32-bit float VapourSynth
+    clip.
 
     The source format is detected from the file extension. RAW CVBS encodings
     (unscaled ADC captures) are not supported and are rejected.
 
     """
     _validate_choice("color_family", color_family, _COLOR_FAMILIES)
-    _validate_choice("chroma_filter", chroma_filter, _CHROMA_FILTERS)
     _validate_choice(
         "color_difference_precision", color_difference_precision,
         _COLOR_DIFF_PRECISIONS,
@@ -278,8 +273,6 @@ def decode_4fsc_video(
         kwargs["decoder"] = decoder_lower
     if color_family is not None:
         kwargs["color_family"] = color_family
-    if chroma_filter is not None:
-        kwargs["chroma_filter"] = chroma_filter
     if color_difference_precision is not None:
         kwargs["color_difference_precision"] = color_difference_precision
     if broadcast_scaling_precision is not None:

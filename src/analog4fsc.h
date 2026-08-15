@@ -42,7 +42,6 @@ struct VSAnalog4fscOptions {
 
     // Output selection / color science knobs.
     std::string colorFamily;       // "", "yuv", "rgb", "gray"
-    std::string chromaFilter;      // "" = decoder default
     std::string colorDiffPrecision;        // "" = default ("modern")
     std::string broadcastScalingPrecision; // "" = default ("scientific")
 

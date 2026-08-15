@@ -12,7 +12,6 @@ Decoding
         [, pr_source] \
         [, decoder] \
         [, color_family] \
-        [, chroma_filter] \
         [, color_difference_precision] \
         [, broadcast_scaling_precision] \
         [, model_path] \
@@ -44,8 +43,10 @@ Decoding
     `vhs-decode <https://github.com/oyvindln/vhs-decode>`_. These files
     normally have a ``.tbc`` extension indicating they are time-base-corrected
     and must have a metadata sidecar file in JSON or SQLite format. The newer
-    CVBS format is also read, detected by extension: ``.composite``, or
-    ``.y``/``.c`` for separated luma/chroma. RAW CVBS encodings are rejected.
+    CVBS format is also read, detected by extension: ``.cvbs``, or
+    ``.cvbsy``/``.cvbsc`` for separated luma/chroma (the pre-1.5.0
+    ``.composite`` and ``.y``/``.c`` spellings are still accepted). RAW CVBS
+    encodings are rejected.
 
     Returns a 32-bit float clip: ``YUV444PS`` (default), ``RGBS``, ``GRAYS``, or
     ``YUV440PS`` for SECAM, per ``color_family``.
@@ -55,7 +56,7 @@ Decoding
     resolves bundled models by ``model_version`` for you.
 
     :param str composite_or_luma_source:
-        Path to the composite or luma-only capture (``.tbc``/``.composite``).
+        Path to the composite or luma-only capture (``.tbc``/``.cvbs``).
 
     :param str chroma_or_pb_source:
         Path to a separate chroma ``.tbc`` file, for Y/C-separated sources such
@@ -78,11 +79,6 @@ Decoding
     :param str color_family:
         Output family: ``"yuv"`` (default), ``"rgb"``, or ``"gray"``. RGB is
         rejected for SECAM.
-
-    :param str chroma_filter:
-        Chroma bandpass/notch: ``"compat"``, ``"equiband_wide"``,
-        ``"equiband"``, ``"color_under"``, ``"wideband_i_ssb"``,
-        ``"equiband_vsb"``.
 
     :param str color_difference_precision:
         ``"classic"`` or ``"modern"``.
