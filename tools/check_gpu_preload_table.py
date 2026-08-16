@@ -74,7 +74,11 @@ def main() -> int:
     dlopen_names = {name for name, _ in getattr(preload, "_DLOPEN_TABLE", ())}
 
     site = Path(sysconfig.get_paths()["purelib"])
-    binaries = [site / "vapoursynth" / "plugins" / "vsanalog" / "vsanalog.so"]
+    plugin_dir = site / "vapoursynth" / "plugins" / "vsanalog"
+    # vsanalog.so plus any CPU-optimized variant beside it: one of those is
+    # what actually loads on a machine whose CPU selects it, so its link-time
+    # needs have to be covered too.
+    binaries = sorted(plugin_dir.glob("vsanalog*.so")) or [plugin_dir / "vsanalog.so"]
     binaries += sorted((site / "vsanalog.libs").glob("libonnxruntime_providers_*.so"))
 
     demanded = set()

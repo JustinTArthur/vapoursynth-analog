@@ -20,6 +20,11 @@ this repack deletes, so a stale ``vsanalog.libs/`` surviving on disk from a
 half-removed older install would be put back on the DLL search path, where its
 DLLs could win over the co-located ones.
 
+The plugin's import library goes too. Meson installs it beside the DLL and
+offers no way to opt out — the implib install ignores ``install_dir`` and is
+hardcoded — but nothing links against a VapourSynth plugin, so in a wheel it is
+dead weight.
+
 Windows-only: Linux and macOS bake an RPATH into the plugin binary, so their
 dependencies resolve without co-location.
 """
@@ -89,12 +94,18 @@ def main(argv):
         shutil.rmtree(libs_dir)
         shutil.copy2(_PRISTINE_INIT, unpacked / "vsanalog" / "__init__.py")
 
+        dropped = sorted(lib.name for lib in plugin_dir.glob("*.lib"))
+        for name in dropped:
+            (plugin_dir / name).unlink()
+
         subprocess.run(
             [sys.executable, "-m", "wheel", "pack", "-d", str(out_dir), str(unpacked)],
             check=True,
         )
 
     print(f"co-located {len(moved)} DLL(s) with the plugin: {', '.join(moved)}")
+    if dropped:
+        print(f"dropped {len(dropped)} import librar(y/ies): {', '.join(dropped)}")
     return 0
 
 

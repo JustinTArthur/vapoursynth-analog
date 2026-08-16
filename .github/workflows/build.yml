@@ -415,7 +415,10 @@ jobs:
             quay.io/pypa/manylinux_2_28_x86_64 \
             bash -exc '
           PYBIN="/opt/python/${PYTHON_TAG}/bin"; export PATH="${PYBIN}:${PATH}"
-          dnf install -y gcc-c++ pkg-config git
+          # clang builds the CPU tier variant further down. Installed here,
+          # before the vendor repositories are enabled, so the package can only
+          # resolve to the distribution one and never to a ROCm LLVM build.
+          dnf install -y gcc-c++ clang pkg-config git
 
           # Headers and pkg-config metadata come bundled in the wheel itself,
           # so the plugin always compiles against the exact ABI it is tested
@@ -506,6 +509,23 @@ jobs:
             -Csetup-args="-Dprefer_static=true" \
             -Csetup-args="-Dchromadec:onnxruntime_root=/opt/ort"
 
+          # An x86-64-v3 variant, which VapourSynth loads only on CPUs that
+          # report the matching ABI level. Same mixed-compiler split as the CPU
+          # wheel job above — clang for the variant, gcc for the baseline every
+          # older CPU gets. The GPU pipelines are unaffected either way: nvcc
+          # and hipcc keep driving their own host compilers, since Meson passes
+          # -ccbin only when cuda_ccbindir is set, which it is not.
+          CC=clang CXX=clang++ meson setup /tmp/bv3 -Dbuild_wheel=false \
+            -Dep=${EP} -Dprefer_static=true -Dchromadec:onnxruntime_root=/opt/ort \
+            -Dcpp_args=-march=x86-64-v3 -Dc_args=-march=x86-64-v3
+          meson compile -C /tmp/bv3
+          # Before auditwheel: it renames the vendored libraries and patches the
+          # importing binaries, so a variant added after would still reference
+          # the unmangled sonames.
+          python3 tools/add_cpu_tiers.py /tmp/dist/*.whl /tmp/tiered/ \
+            --tier avx2=/tmp/bv3/vsanalog.so
+          rm -f /tmp/dist/*.whl && mv /tmp/tiered/*.whl /tmp/dist/
+
           # No `|| auditwheel repair` fallback: a retry without --exclude
           # succeeds by vendoring the entire vendor runtime, which is both the
           # multi-gigabyte wheel we are avoiding and invisible in a green log.
@@ -541,11 +561,20 @@ jobs:
           fi
 
           # Load check. The vendor runtime is excluded from the wheel, so the
-          # loader needs it on the path here exactly as a user would.
+          # loader needs it on the path here exactly as a user would. The tier
+          # expectation makes a variant that stopped being injected a failure
+          # rather than a wheel that silently runs the baseline everywhere.
+          export VSANALOG_EXPECT_CPU_TIERS=avx2
           python3 -m pip install --quiet "vapoursynth==${VAPOURSYNTH_VERSION}" pytest
           python3 -m pip install --quiet /wheelhouse/*.whl
           python3 tools/check_wheel_plugin.py
-          python3 -m pytest -v tests/test_autoload.py
+          # The colorimetry tests are synthetic CPU color math, so they run
+          # with no GPU — and through whichever CPU variant the probe picked,
+          # the only place this job executes the tier binary. The layout checks
+          # assert rather than skip because a wheel is installed; the smoke test
+          # covers the PyPI wheels this way but never sees a GPU one.
+          VSANALOG_CHECK_WHEEL_LAYOUT=1 python3 -m pytest -v \
+            tests/test_autoload.py tests/test_colorimetry.py tests/test_wheel_layout.py
 
           # Pip-flow load checks: with LD_LIBRARY_PATH gone, the plugin
           # link-time CUDA deps must resolve from pip nvidia wheels — once
@@ -571,7 +600,7 @@ jobs:
             python3 tools/check_gpu_preload_table.py
             env -u LD_LIBRARY_PATH python3 tools/check_wheel_plugin.py
             env -u LD_LIBRARY_PATH VSANALOG_GPU_RUNTIME=off python3 tools/check_wheel_plugin.py
-            env -u LD_LIBRARY_PATH python3 -m pytest -v tests/test_autoload.py
+            env -u LD_LIBRARY_PATH python3 -m pytest -v tests/test_autoload.py tests/test_colorimetry.py
           fi
           '
       - uses: actions/upload-artifact@v6
@@ -877,6 +906,19 @@ jobs:
           .venv-vs\Scripts\pip install --quiet "vapoursynth==$env:VAPOURSYNTH_VERSION"
           $pkgDir = & .venv-vs\Scripts\vapoursynth.exe get-pkgconfig-dir
           "PKG_CONFIG_PATH=$pkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # A whole second build at /arch:AVX2, loaded only on CPUs that report the
+      # matching ABI level; same rationale as the CPU wheel job above. The
+      # dialect flag is here for the reason given on the wheel build below.
+      - name: Build the AVX2 variant
+        shell: pwsh
+        run: |
+          meson setup build_avx2 -Dbuild_wheel=false `
+            -Dep=${{ matrix.ep }} -Dchromadec:onnxruntime_root="$env:ORT_ROOT" `
+            -Dcuda_args=-std=c++17 `
+            -Dcpp_args=/arch:AVX2 -Dc_args=/arch:AVX2
+          meson compile -C build_avx2
+
       - name: Build wheel (${{ matrix.variant }})
         shell: pwsh
         run: |
@@ -891,6 +933,13 @@ jobs:
             -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT" `
             -Csetup-args="-Dcuda_args=-std=c++17"
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
+
+          # Inject the AVX2 variant BEFORE delvewheel: it renames the vendored
+          # DLLs and patches the importing binaries, so a variant added
+          # afterwards would still reference the unmangled names and fail to
+          # load.
+          python tools/add_cpu_tiers.py $wheel tiered/ --tier avx2=build_avx2/vsanalog.dll
+          $wheel = Get-ChildItem tiered/*.whl | Select-Object -First 1
 
           # ORT LoadLibrary's its execution providers by exact filename instead
           # of linking them, so delvewheel neither finds them (--add-dll) nor
@@ -937,6 +986,10 @@ jobs:
       # check_wheel_plugin.py asserts instead of skipping the way the test does.
       - name: Load check
         shell: pwsh
+        # Makes a variant that stopped being injected a failure rather than a
+        # wheel that silently runs the baseline on every CPU.
+        env:
+          VSANALOG_EXPECT_CPU_TIERS: avx2
         run: |
           # pwsh does not abort on a native command's exit code, so without
           # this a failing check_wheel_plugin.py just scrolls past.
@@ -944,7 +997,13 @@ jobs:
           .venv-vs\Scripts\pip install --quiet pytest
           .venv-vs\Scripts\pip install --quiet (Get-ChildItem wheelhouse/*.whl | Select-Object -First 1).FullName
           .venv-vs\Scripts\python tools/check_wheel_plugin.py
-          .venv-vs\Scripts\python -m pytest -v tests/test_autoload.py
+          # Synthetic CPU color math: no GPU needed, and it runs through
+          # whichever CPU variant the probe picked — the only place this job
+          # executes the tier binary. The layout checks assert rather than skip
+          # because a wheel is installed; the smoke test covers the PyPI wheels
+          # this way but never sees a GPU one.
+          $env:VSANALOG_CHECK_WHEEL_LAYOUT = "1"
+          .venv-vs\Scripts\python -m pytest -v tests/test_autoload.py tests/test_colorimetry.py tests/test_wheel_layout.py
 
       # The load check above resolves the vendor runtime from the toolkit on
       # PATH, which says nothing about the pip layout the [cuda] extra
@@ -954,6 +1013,8 @@ jobs:
       # the system. The Linux GPU legs cover their layout the same way.
       - name: Load check through the [cuda] extra
         shell: pwsh
+        env:
+          VSANALOG_EXPECT_CPU_TIERS: avx2
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           python -m venv .venv-extra
@@ -979,21 +1040,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # expect_tiers names the CPU variants that wheel is built to carry,
+          # asserted by the load check below. Empty everywhere a variant would
+          # be dead weight: aarch64 (the probe is x86-only) and macOS x86_64,
+          # whose job builds no second ISA.
           - runner: ubuntu-latest
             wheel: vsanalog-wheel-linux-x86_64
             tarball: vsanalog-linux-x86_64
+            expect_tiers: avx2
           - runner: ubuntu-24.04-arm
             wheel: vsanalog-wheel-linux-aarch64
             tarball: vsanalog-linux-aarch64
+            expect_tiers: ''
           - runner: macos-14
             wheel: vsanalog-wheel-macos-arm64
             tarball: vsanalog-macos-arm64
+            expect_tiers: ''
           - runner: macos-15-intel
             wheel: vsanalog-wheel-macos-x86_64
             tarball: vsanalog-macos-x86_64
+            expect_tiers: ''
           - runner: windows-2022
             wheel: vsanalog-wheel-windows-x64
             tarball: vsanalog-windows-x64
+            expect_tiers: avx2
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -1041,6 +1111,8 @@ jobs:
       # anything imports vsanalog: that import registers the DLL search path and
       # would mask the very failure being tested.
       - name: Load check (installed wheel)
+        env:
+          VSANALOG_EXPECT_CPU_TIERS: ${{ matrix.expect_tiers }}
         run: |
           if [ -d .venv/Scripts ]; then . .venv/Scripts/activate; else . .venv/bin/activate; fi
           python tools/check_wheel_plugin.py

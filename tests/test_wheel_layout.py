@@ -74,10 +74,24 @@ def test_windows_deps_colocated():
     if platform.system() != "Windows":
         pytest.skip("Windows-only layout check")
     pd = _plugin_dir()
-    deps = [p for p in pd.glob("*.dll") if p.name != "vsanalog.dll"]
+    # vsanalog.avx2.dll and friends are plugin builds, not dependencies; counting
+    # one would let this pass on a wheel whose vendored DLLs never got moved.
+    deps = [p for p in pd.glob("*.dll") if not p.name.startswith("vsanalog.")]
     assert deps, (
         f"no dependency DLLs beside the plugin in {pd}; "
         "tools/colocate_plugin_libs.py did not run or found nothing to move"
+    )
+
+
+def test_windows_no_import_library():
+    if platform.system() != "Windows":
+        pytest.skip("Windows-only layout check")
+    # Meson installs the plugin's .lib beside the .dll with no way to opt out;
+    # nothing links against a plugin, so the repack drops it.
+    libs = sorted(p.name for p in _plugin_dir().glob("*.lib"))
+    assert not libs, (
+        f"import librar(y/ies) shipped beside the plugin: {libs}; "
+        "tools/colocate_plugin_libs.py should have dropped them"
     )
 
 

@@ -13,9 +13,10 @@ and repacks so RECORD checksums stay valid.
 
 With ``--gpu-runtime-dirs``, additionally patches loader search-path entries
 pointing at the given site-packages-relative directories (pip's nvidia/* and
-tensorrt_libs) onto the injected provider libraries and the plugin itself, so
-their link-time vendor-runtime dependencies resolve from pip packages even in
-flows where no preload ran. Each file keeps the dynamic tag it already has:
+tensorrt_libs) onto the injected provider libraries and every plugin binary —
+``vsanalog.so`` and any CPU-optimized variant beside it — so their link-time
+vendor-runtime dependencies resolve from pip packages even in flows where no
+preload ran. Each file keeps the dynamic tag it already has:
 auditwheel deliberately stamps the plugin with DT_RPATH (so LD_LIBRARY_PATH
 cannot shadow the vendored ONNX Runtime), and flipping it to DT_RUNPATH would
 silently change that; a file with no tag gets DT_RUNPATH, which ranks below
@@ -38,7 +39,11 @@ from pathlib import Path
 # own --add-dll instead of this script.
 LIBS_DIR_NAME = "vsanalog.libs"
 
-PLUGIN_REL_PATH = Path("vapoursynth/plugins/vsanalog/vsanalog.so")
+PLUGIN_DIR_REL_PATH = Path("vapoursynth/plugins/vsanalog")
+
+# vsanalog.so plus any CPU-optimized siblings (vsanalog.avx2.so and friends),
+# which link the same vendor runtime and so need the same search-path entries.
+PLUGIN_GLOB = "vsanalog*.so"
 
 
 def _rpath_state(lib: Path) -> tuple[str | None, str]:
@@ -90,8 +95,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--gpu-runtime-dirs",
         help="colon-separated site-packages-relative directories to add as "
-        "$ORIGIN-relative RUNPATH entries on the injected libraries and the "
-        "plugin (Linux GPU wheels only)",
+        "$ORIGIN-relative RUNPATH entries on the injected libraries and every "
+        "plugin binary (Linux GPU wheels only)",
     )
     args = parser.parse_args(argv[1:])
 
@@ -137,13 +142,18 @@ def main(argv: list[str]) -> int:
 
             # The plugin's own link-time vendor dependencies (with_cuda
             # builds' cudart/cufft) resolve at plugin load; from
-            # vapoursynth/plugins/vsanalog/, site-packages is three up.
-            plugin = unpacked / PLUGIN_REL_PATH
-            if not plugin.is_file():
-                sys.stderr.write(f"plugin not found at {PLUGIN_REL_PATH} in wheel\n")
+            # vapoursynth/plugins/vsanalog/, site-packages is three up. A CPU
+            # variant is loaded in the baseline's place, so missing it here
+            # would fail the pip-only flow on exactly the CPUs that select one.
+            plugins = sorted((unpacked / PLUGIN_DIR_REL_PATH).glob(PLUGIN_GLOB))
+            if not plugins:
+                sys.stderr.write(
+                    f"no {PLUGIN_GLOB} found in {PLUGIN_DIR_REL_PATH} in wheel\n"
+                )
                 return 1
             plugin_entries = [f"$ORIGIN/../../../{d}" for d in runtime_dirs]
-            _add_search_path_entries(plugin, plugin_entries)
+            for plugin in plugins:
+                _add_search_path_entries(plugin, plugin_entries)
 
         out_dir = wheel.parent
         wheel.unlink()
