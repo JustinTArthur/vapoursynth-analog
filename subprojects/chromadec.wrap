@@ -1,10 +1,9 @@
 [wrap-git]
 url = https://github.com/JustinTArthur/libchromadec.git
-revision = 7e51142863cf33fa615d1e3084ebb874ca717f48
+revision = v0.1.0
 
 # libchromadec calls meson.override_dependency('chromadec', ...), so
 # dependency('chromadec') resolves to this subproject with no install step.
-# Pinned to a commit for reproducibility; move to the '0.1.0' tag once upstream
-# cuts it (freezes the ABI).
+# Pinned to a release tag; the ABI is frozen from 0.1.0 onward.
 [provide]
 dependency_names = chromadec
