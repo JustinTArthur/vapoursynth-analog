@@ -67,7 +67,10 @@ Changelog
 - Added ``color_family`` to select ``YUV444PS`` (default), ``RGBS``, or
   ``GRAYS`` float output.
 - Added ``model_precision``, ``color_difference_precision`` and
-  ``broadcast_scaling_precision`` options.
+  ``broadcast_scaling_precision`` options. The bundled ``nntransform3d``
+  ``v2`` weights default to fp16: TensorRT builds a mixed-precision engine, and
+  the CUDA and Windows wheels bundle an fp16 copy of those weights for an
+  explicit ``onnx_provider="cuda"`` or ``"directml"``.
 - Output geometry now follows the interface standards instead of the source's
   declared crop, so a video system always decodes to the same raster. NTSC and
   PAL-M give **768x486** (SMPTE ST 244's digital active line, ST 170's active

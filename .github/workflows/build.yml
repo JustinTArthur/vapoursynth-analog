@@ -28,9 +28,14 @@ concurrency:
 #     unpinned tensorrt-cuXX from PyPI now installs 11.x, which it cannot use.
 #   - microsoft/onnxruntime#29779. Since 1.27 the TRT EP tests the composite
 #     NV_TENSORRT_VERSION against 11, which is true on every TensorRT 10, so it
-#     never marks networks strongly typed. Harmless for us — our models are all
-#     fp32, and with no precision flags TensorRT has only fp32 kernels either
-#     way — but it is why a bundled fp16 model would decode slowly.
+#     never marks networks strongly typed. Harmless as long as TensorRT only
+#     ever sees the fp32 model + trt_fp16_enable (its own mixed-precision
+#     engine build). It is also why TensorRT is never pointed at the fp16
+#     .onnx tools/convert_models_fp16.py produces for CUDA/DirectML: measured
+#     on an A10G (ORT 1.28, TensorRT 10.16), the fp16-native file runs at
+#     TensorRT's fp32 speed — half of what trt_fp16_enable delivers on the
+#     fp32 file. vsanalog's _maybe_fp16_sibling keeps that file scoped to an
+#     explicit cuda/directml provider pin for exactly this reason.
 env:
   ORT_VERSION: "1.28.0"
   # MIGraphX comes from AMD, not Microsoft, and moves on ROCm's cadence rather
@@ -385,6 +390,15 @@ jobs:
       - uses: actions/checkout@v6
       - name: Fetch NN models
         run: python3 tools/fetch_models.py
+      # CUDA has no engine-level fp16 mode the way TensorRT/MIGraphX do (see
+      # the TRT ORT_VERSION note above), so it needs this pre-converted
+      # sibling instead; MIGraphX doesn't, and skips this step.
+      - name: Convert fp16 models
+        if: matrix.ep == 'cuda'
+        run: |
+          python3 -m venv .venv-fp16
+          .venv-fp16/bin/pip install --quiet onnxruntime
+          .venv-fp16/bin/python tools/convert_models_fp16.py
       - name: Build manylinux GPU wheel (${{ matrix.variant }})
         run: |
           mkdir -p wheelhouse
@@ -598,6 +612,16 @@ jobs:
       - name: Fetch NN models
         run: python tools/fetch_models.py
 
+      # DirectML has no engine-level fp16 mode the way TensorRT/MIGraphX do,
+      # so it needs this pre-converted sibling instead; see the ORT_VERSION
+      # note above for why TensorRT must never be handed this file.
+      - name: Convert fp16 models
+        shell: pwsh
+        run: |
+          python -m venv .venv-fp16
+          .venv-fp16\Scripts\pip install --quiet onnxruntime
+          .venv-fp16\Scripts\python tools\convert_models_fp16.py
+
       # The wheel bundles the DML-capable engine from the Windows ML lineage:
       # onnxruntime.dll (CPU and DirectML EPs built in, so machines without a
       # usable DX12 device still decode) with DirectML.dll beside it, both
@@ -808,6 +832,16 @@ jobs:
 
       - name: Fetch NN models
         run: python tools/fetch_models.py
+
+      # CUDA has no engine-level fp16 mode the way TensorRT/MIGraphX do, so
+      # it needs this pre-converted sibling instead; see the ORT_VERSION note
+      # above for why TensorRT must never be handed this file.
+      - name: Convert fp16 models
+        shell: pwsh
+        run: |
+          python -m venv .venv-fp16
+          .venv-fp16\Scripts\pip install --quiet onnxruntime
+          .venv-fp16\Scripts\python tools\convert_models_fp16.py
 
       - name: Install ONNX Runtime (${{ matrix.variant }})
         shell: pwsh

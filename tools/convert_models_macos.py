@@ -96,6 +96,10 @@ def main() -> int:
 
     for onnx in onnx_files:
         rel = onnx.relative_to(args.dest).as_posix()
+        if rel.endswith("-fp16.onnx"):
+            # A tools/convert_models_fp16.py sibling for the CUDA/DirectML
+            # wheels; the CoreML precision is chosen below from the fp32 file.
+            continue
         out = onnx.with_suffix(".mlpackage")
         precision = "fp16" if _fp16_safe(rel, args.fp16, platform.machine()) else "fp32"
         cmd = [

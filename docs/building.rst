@@ -147,6 +147,15 @@ an Intel Mac too (where it lands on the GPU and measures slightly slower than
 fp32). No other bundled model survives fp16: the ``v1`` chroma_net series
 overflows its range and the ldzeug2 models break on index math.
 
+The CUDA and Windows wheels additionally run ``tools/convert_models_fp16.py``,
+which writes an fp16 copy of the same fp16-safe model beside the fp32 one
+(``chroma_net-v2-...-fp16.onnx``, via ``onnxruntime.transformers.float16``
+with the graph's inputs and outputs pinned to fp32). The CUDA and DirectML
+execution providers have no engine-level fp16 mode of their own — TensorRT
+does, and keeps using the fp32 file — so this sibling is what an explicit
+``onnx_provider="cuda"`` or ``"directml"`` loads at the default ``"fp16"``
+precision. It needs only the pip ``onnxruntime`` package for its converter.
+
 Self-Contained Plugin Builds
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 A default build is already self-contained apart from ONNX Runtime: FFTW and

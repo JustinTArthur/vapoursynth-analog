@@ -103,6 +103,14 @@ _NN_PROVIDERS = frozenset({
     "auto", "cpu", "cuda", "gpu", "tensorrt", "trt", "migraphx", "directml", "coreml",
 })
 
+# Providers with no engine-level fp16 mode (unlike TensorRT's
+# trt_fp16_enable): their only route to fp16 is a pre-converted .onnx
+# sibling (tools/convert_models_fp16.py). Explicit pin only, never "auto":
+# TensorRT is tried ahead of CUDA on the same session, and handed the
+# fp16-native file it runs at its fp32 speed — half of what
+# trt_fp16_enable on the fp32 file delivers (measured on an A10G).
+_FP16_NATIVE_ONLY_PROVIDERS = frozenset({"cuda", "gpu", "directml"})
+
 _NN_PRECISIONS = {"fp32", "fp16"}
 
 
@@ -173,6 +181,19 @@ def _resolve_nn_model(
             "been built without neural-network models."
         )
     return str(path), scale, fp16_safe
+
+
+def _maybe_fp16_sibling(path: str, provider: str | None, precision: str) -> str:
+    """Swap to a pre-converted ``<stem>-fp16.onnx`` sibling of ``path``, for
+    providers in ``_FP16_NATIVE_ONLY_PROVIDERS`` requesting fp16. Falls back
+    to ``path`` unless the sibling was actually bundled (e.g. an older wheel,
+    or a decoder/version convert_models_fp16.py skipped).
+    """
+    if precision != "fp16" or provider not in _FP16_NATIVE_ONLY_PROVIDERS:
+        return path
+    p = Path(path)
+    sibling = p.with_name(f"{p.stem}-fp16{p.suffix}")
+    return str(sibling) if sibling.exists() else path
 
 
 def _validate_choice(name: str, value: str | None, allowed: set[str]) -> None:
@@ -280,20 +301,7 @@ def decode_4fsc_video(
 
     if is_nn_decoder:
         assert decoder_lower is not None
-        path, registry_scale, fp16_safe = _resolve_nn_model(
-            decoder_lower, model_version, model_path,
-        )
-        kwargs["model_path"] = path
-        # Explicit override wins over the registry scale; only forward a
-        # non-default scale to keep the call clean.
-        scale = model_input_scale if model_input_scale is not None else registry_scale
-        if scale != 1.0:
-            kwargs["model_input_scale"] = scale
-        # fp16-safe weights allow it by default: only TensorRT acts on it, and
-        # there it buys a mixed-precision engine for well under a bit of chroma.
-        precision = model_precision or ("fp16" if fp16_safe else "fp32")
-        if precision != "fp32":
-            kwargs["model_precision"] = precision
+        provider = None
         if onnx_provider is not None:
             provider = onnx_provider.strip().lower()
             if provider not in _NN_PROVIDERS:
@@ -302,6 +310,25 @@ def decode_4fsc_video(
                     f"got {onnx_provider!r}"
                 )
             kwargs["onnx_provider"] = provider
+
+        path, registry_scale, fp16_safe = _resolve_nn_model(
+            decoder_lower, model_version, model_path,
+        )
+        # Explicit override wins over the registry scale; only forward a
+        # non-default scale to keep the call clean.
+        scale = model_input_scale if model_input_scale is not None else registry_scale
+        if scale != 1.0:
+            kwargs["model_input_scale"] = scale
+        # fp16-safe weights allow it by default: TensorRT builds a
+        # mixed-precision engine from this same fp32 file, CoreML ships an
+        # fp16 package outright, and an explicit CUDA/DirectML pin swaps in
+        # a pre-converted fp16 file (_maybe_fp16_sibling). Backends with no
+        # fp16 mode — CPU, and MIGraphX, where it measured ~6.8x slower on
+        # gfx906/gfx900 and so was left unwired — ignore the flag.
+        precision = model_precision or ("fp16" if fp16_safe else "fp32")
+        if precision != "fp32":
+            kwargs["model_precision"] = precision
+        kwargs["model_path"] = _maybe_fp16_sibling(path, provider, precision)
         if model_chroma_bandpass is not None:
             kwargs["model_chroma_bandpass"] = int(bool(model_chroma_bandpass))
 

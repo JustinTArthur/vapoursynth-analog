@@ -119,3 +119,41 @@ def test_invalid_model_precision_rejected(value):
         vsanalog.decode_4fsc_video(
             "x.tbc", decoder="nntransform3d", model_precision=value,
         )
+
+
+@pytest.mark.parametrize("provider", ["cuda", "gpu", "directml"])
+def test_fp16_sibling_used_when_bundled(tmp_path, provider):
+    # TensorRT gets fp16 via an engine-level flag on the fp32 file; CUDA and
+    # DirectML have no such flag, so an explicit pin to one of them swaps in
+    # the pre-converted sibling when convert_models_fp16.py produced one.
+    base = tmp_path / "chroma_net-v2-202605.onnx"
+    base.write_bytes(b"")
+    sibling = tmp_path / "chroma_net-v2-202605-fp16.onnx"
+    sibling.write_bytes(b"")
+    assert vsanalog._maybe_fp16_sibling(str(base), provider, "fp16") == str(sibling)
+
+
+@pytest.mark.parametrize("provider", ["cuda", "gpu", "directml"])
+def test_fp16_sibling_falls_back_when_not_bundled(tmp_path, provider):
+    base = tmp_path / "chroma_net-v2-202605.onnx"
+    base.write_bytes(b"")
+    assert vsanalog._maybe_fp16_sibling(str(base), provider, "fp16") == str(base)
+
+
+@pytest.mark.parametrize("provider", [None, "auto", "tensorrt", "trt", "migraphx", "cpu"])
+def test_fp16_sibling_not_used_outside_pinned_cuda_directml(tmp_path, provider):
+    # TensorRT acts on model_precision itself against the fp32 file; an
+    # unpinned "auto" request must not risk handing TensorRT a
+    # fp16-native file it shares the session with CUDA for (TensorRT is
+    # tried first in the auto chain).
+    base = tmp_path / "chroma_net-v2-202605.onnx"
+    base.write_bytes(b"")
+    (tmp_path / "chroma_net-v2-202605-fp16.onnx").write_bytes(b"")
+    assert vsanalog._maybe_fp16_sibling(str(base), provider, "fp16") == str(base)
+
+
+def test_fp16_sibling_not_used_at_fp32_precision(tmp_path):
+    base = tmp_path / "chroma_net-v2-202605.onnx"
+    base.write_bytes(b"")
+    (tmp_path / "chroma_net-v2-202605-fp16.onnx").write_bytes(b"")
+    assert vsanalog._maybe_fp16_sibling(str(base), "cuda", "fp32") == str(base)

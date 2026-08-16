@@ -121,15 +121,20 @@ Decoding
 
     :param model_precision:
         Compute precision a neural-network *decoder*'s backend may use:
-        ``"fp32"`` or ``"fp16"``. Permission rather than a guarantee — only a
-        backend that compiles the model into a device engine acts on it, which
-        today means TensorRT. Defaults to ``"fp16"`` for the bundled
-        ``nntransform3d`` ``"v2"`` weights and ``"fp32"`` for everything else,
-        including any custom *model_path* (nothing here can inspect an
-        arbitrary model's training scale, and fp16 on weights that overflow it
-        yields NaN output). fp16 and fp32 engines are cached separately, so
-        changing this never reuses an engine built the other way. Unrelated to
-        the macOS packages' precision, which is fixed when they are converted.
+        ``"fp32"`` or ``"fp16"``. Permission rather than a guarantee. TensorRT
+        acts on it by building a mixed fp16/fp32 engine from the bundled fp32
+        weights (fp16 and fp32 engines are cached separately, so changing this
+        never reuses an engine built the other way). CUDA and DirectML have no
+        such engine mode, so on those the wheel instead bundles a pre-converted
+        fp16 copy of the weights, used only when *onnx_provider* is pinned to
+        ``"cuda"`` or ``"directml"`` — an ``"auto"`` request that lands on the
+        CUDA provider stays fp32. Every other backend ignores the setting.
+        Defaults to ``"fp16"`` for the bundled ``nntransform3d`` ``"v2"``
+        weights and ``"fp32"`` for everything else, including any custom
+        *model_path* (nothing here can inspect an arbitrary model's training
+        scale, and fp16 on weights that overflow it yields NaN output).
+        Unrelated to the macOS packages' precision, which is fixed when they
+        are converted.
     :type model_precision: :py:class:`str` | None
 
     :param onnx_provider:
