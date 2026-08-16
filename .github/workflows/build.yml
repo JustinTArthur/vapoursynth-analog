@@ -55,6 +55,11 @@ env:
   # of ORT_VERSION.
   ORT_WINML_VERSION: "1.27.1"
   ORT_WINML_WHEEL_VERSION: "1.27.1.202607110137"
+  # The VapourSynth release every build compiles against. Sourced entirely
+  # from the pip package (headers + pkg-config bundled since R79's wheel) via
+  # `vapoursynth get-pkgconfig-dir`, so bumping this one value is enough —
+  # nothing here still floats against an unpinned branch or a stale SDK zip.
+  VAPOURSYNTH_VERSION: "79"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -118,32 +123,19 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config
 
-      - name: Provide VapourSynth headers and pkg-config file
-        run: |
-          sudo mkdir -p /usr/include/vapoursynth /usr/lib/pkgconfig
-          for h in VapourSynth4.h VSHelper4.h; do
-            sudo curl -sSL "https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/$h" \
-              -o "/usr/include/vapoursynth/$h"
-          done
-          sudo tee /usr/lib/pkgconfig/vapoursynth.pc > /dev/null << 'VSPC'
-          prefix=/usr
-          includedir=${prefix}/include/vapoursynth
-          libdir=${prefix}/lib
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 74
-          Cflags: -I${includedir}
-          VSPC
-
       - name: Build and import from sdist
         run: |
           python -m venv .venv && . .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install "vapoursynth>=76"
+          # Headers and pkg-config metadata come from this exact wheel (via
+          # `vapoursynth get-pkgconfig-dir`) below, so the plugin always
+          # compiles against the ABI it is tested against instead of
+          # whatever floats on the pip resolver.
+          python -m pip install "vapoursynth==${VAPOURSYNTH_VERSION}"
           # -Dep=none: the NN decoders need an ONNX Runtime the sdist can't
           # assume. Everything else must build from the wrap alone.
-          python -m pip install -v dist/*.tar.gz -Csetup-args="-Dep=none"
+          PKG_CONFIG_PATH="$(vapoursynth get-pkgconfig-dir)" \
+            python -m pip install -v dist/*.tar.gz -Csetup-args="-Dep=none"
           python -c "import vsanalog; vsanalog.requires_plugin(lambda: None)(); print('sdist build imports OK')"
 
   # ---------------------------------------------------------------------------
@@ -255,6 +247,7 @@ jobs:
             -e ORT_VERSION="${ORT_VERSION}" \
             -e ORT_PKG="${{ matrix.ort }}" \
             -e ARCH="${{ matrix.arch }}" \
+            -e VAPOURSYNTH_VERSION="${VAPOURSYNTH_VERSION}" \
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
             -v "${{ github.workspace }}/plugin-out:/out" \
@@ -271,19 +264,11 @@ jobs:
           mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
           export LD_LIBRARY_PATH="/opt/ort/lib:${LD_LIBRARY_PATH}"
 
-          mkdir -p /usr/include/vapoursynth
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h -o /usr/include/vapoursynth/VapourSynth4.h
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h -o /usr/include/vapoursynth/VSHelper4.h
-          cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
-          prefix=/usr
-          includedir=\${prefix}/include/vapoursynth
-          libdir=\${prefix}/lib64
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 74
-          Cflags: -I\${includedir}
-          VSPC
+          # Headers and pkg-config metadata come bundled in the wheel itself,
+          # so the plugin always compiles against the exact ABI it is tested
+          # against instead of whatever floats on the upstream master branch.
+          python3 -m pip install --quiet "vapoursynth==${VAPOURSYNTH_VERSION}"
+          export PKG_CONFIG_PATH="$(vapoursynth get-pkgconfig-dir)"
 
           python3 -m pip install --quiet "meson!=1.11.0" ninja meson-python build auditwheel wheel
 
@@ -405,6 +390,7 @@ jobs:
           docker run --rm \
             -e ORT_VERSION="${ORT_VERSION}" -e EP="${{ matrix.ep }}" \
             -e VARIANT="${{ matrix.variant }}" \
+            -e VAPOURSYNTH_VERSION="${VAPOURSYNTH_VERSION}" \
             -e CUDA_RPM_SUFFIX="${{ matrix.cuda_rpm_suffix }}" \
             -e CUDA_HOME_DIR="${{ matrix.cuda_home }}" \
             -e ORT_GPU_PKG="${{ matrix.ort_gpu_pkg }}" \
@@ -417,19 +403,11 @@ jobs:
           PYBIN="/opt/python/${PYTHON_TAG}/bin"; export PATH="${PYBIN}:${PATH}"
           dnf install -y gcc-c++ pkg-config git
 
-          mkdir -p /usr/include/vapoursynth
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VapourSynth4.h -o /usr/include/vapoursynth/VapourSynth4.h
-          curl -sSL https://raw.githubusercontent.com/vapoursynth/vapoursynth/master/include/VSHelper4.h -o /usr/include/vapoursynth/VSHelper4.h
-          cat > /usr/lib64/pkgconfig/vapoursynth.pc << VSPC
-          prefix=/usr
-          includedir=\${prefix}/include/vapoursynth
-          libdir=\${prefix}/lib64
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 74
-          Cflags: -I\${includedir}
-          VSPC
+          # Headers and pkg-config metadata come bundled in the wheel itself,
+          # so the plugin always compiles against the exact ABI it is tested
+          # against instead of whatever floats on the upstream master branch.
+          python3 -m pip install --quiet "vapoursynth==${VAPOURSYNTH_VERSION}"
+          export PKG_CONFIG_PATH="$(vapoursynth get-pkgconfig-dir)"
 
           python3 -m pip install --quiet "meson!=1.11.0" ninja meson-python build auditwheel wheel
 
@@ -539,7 +517,7 @@ jobs:
 
           # Load check. The vendor runtime is excluded from the wheel, so the
           # loader needs it on the path here exactly as a user would.
-          python3 -m pip install --quiet "vapoursynth>=76" pytest
+          python3 -m pip install --quiet "vapoursynth==${VAPOURSYNTH_VERSION}" pytest
           python3 -m pip install --quiet /wheelhouse/*.whl
           python3 tools/check_wheel_plugin.py
           python3 -m pytest -v tests/test_autoload.py
@@ -656,32 +634,22 @@ jobs:
           Copy-Item "winml_wheel/unpacked/onnxruntime/capi/DirectML.dll" "$root/lib/"
           "ORT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Download VapourSynth SDK
+      # Headers and pkg-config metadata come bundled in the wheel itself, so
+      # the plugin always compiles against the exact ABI it is tested
+      # against instead of a hand-pinned SDK archive that can go stale
+      # unnoticed. PKG_CONFIG_PATH is written to GITHUB_ENV so every later
+      # step in this job picks it up without resetting it themselves.
+      - name: Provide VapourSynth headers and pkg-config file
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/vapoursynth/vapoursynth/releases/download/R70/VapourSynth64-Portable-R70.zip" -OutFile vs.zip
-          Expand-Archive vs.zip -DestinationPath vs_sdk
-
-      - name: Create pkg-config files
-        shell: pwsh
-        run: |
-          $pkgConfigDir = "pkgconfig"; New-Item -ItemType Directory -Force -Path $pkgConfigDir | Out-Null
-          $workspacePath = "${{ github.workspace }}".Replace('\', '/')
-          @"
-          prefix=$workspacePath/vs_sdk
-          includedir=`${prefix}/sdk/include/vapoursynth
-          libdir=`${prefix}
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 70
-          Cflags: -I`${includedir}
-          "@ | Out-File -FilePath "$pkgConfigDir/vapoursynth.pc" -Encoding ASCII -NoNewline
+          python -m venv .venv-vs
+          .venv-vs\Scripts\pip install --quiet "vapoursynth==$env:VAPOURSYNTH_VERSION"
+          $pkgDir = & .venv-vs\Scripts\vapoursynth.exe get-pkgconfig-dir
+          "PKG_CONFIG_PATH=$pkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build wheel
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           pip install delvewheel wheel build
           python -m build --wheel -o dist/ `
             -Csetup-args="-Dep=directml" `
@@ -694,7 +662,6 @@ jobs:
       - name: Build the AVX2 variant
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           meson setup build_avx2 -Dbuild_wheel=false `
             -Dep=directml -Dchromadec:onnxruntime_root="$env:ORT_ROOT" `
             -Dcpp_args=/arch:AVX2 -Dc_args=/arch:AVX2
@@ -751,7 +718,6 @@ jobs:
       - name: Build standalone plugin
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           meson setup build_tarball -Dbuild_wheel=false -Dep=none -Dprefer_static=true
           meson compile -C build_tarball
 
@@ -852,30 +818,22 @@ jobs:
           $root = "$PWD/ort_extract/$ort"
           "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ORT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Download VapourSynth SDK
+      # Headers and pkg-config metadata come bundled in the wheel itself, so
+      # the plugin always compiles against the exact ABI it is tested
+      # against instead of a hand-pinned SDK archive that can go stale
+      # unnoticed. PKG_CONFIG_PATH is written to GITHUB_ENV so every later
+      # step in this job picks it up without resetting it themselves. The
+      # same venv is reused for the load check below.
+      - name: Provide VapourSynth headers and pkg-config file
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/vapoursynth/vapoursynth/releases/download/R70/VapourSynth64-Portable-R70.zip" -OutFile vs.zip
-          Expand-Archive vs.zip -DestinationPath vs_sdk
-      - name: Create pkg-config files
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path pkgconfig | Out-Null
-          $workspacePath = "${{ github.workspace }}".Replace('\', '/')
-          @"
-          prefix=$workspacePath/vs_sdk
-          includedir=`${prefix}/sdk/include/vapoursynth
-          libdir=`${prefix}
-
-          Name: vapoursynth
-          Description: VapourSynth
-          Version: 70
-          Cflags: -I`${includedir}
-          "@ | Out-File -FilePath "pkgconfig/vapoursynth.pc" -Encoding ASCII -NoNewline
+          python -m venv .venv-vs
+          .venv-vs\Scripts\pip install --quiet "vapoursynth==$env:VAPOURSYNTH_VERSION"
+          $pkgDir = & .venv-vs\Scripts\vapoursynth.exe get-pkgconfig-dir
+          "PKG_CONFIG_PATH=$pkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build wheel (${{ matrix.variant }})
         shell: pwsh
         run: |
-          $env:PKG_CONFIG_PATH = "${{ github.workspace }}/pkgconfig"
           pip install delvewheel wheel build
           python -m build --wheel -o dist/ `
             -Csetup-args="-Dep=${{ matrix.ep }}" `
@@ -928,10 +886,10 @@ jobs:
       - name: Load check
         shell: pwsh
         run: |
-          pip install "vapoursynth>=76" pytest
-          pip install (Get-ChildItem wheelhouse/*.whl | Select-Object -First 1).FullName
-          python tools/check_wheel_plugin.py
-          python -m pytest -v tests/test_autoload.py
+          .venv-vs\Scripts\pip install --quiet pytest
+          .venv-vs\Scripts\pip install --quiet (Get-ChildItem wheelhouse/*.whl | Select-Object -First 1).FullName
+          .venv-vs\Scripts\python tools/check_wheel_plugin.py
+          .venv-vs\Scripts\python -m pytest -v tests/test_autoload.py
 
       - uses: actions/upload-artifact@v6
         with:
@@ -989,7 +947,7 @@ jobs:
           python -m pip install --upgrade pip
           # numpy backs a couple of the pixel-level assertions; without it
           # those tests skip rather than fail.
-          python -m pip install "vapoursynth>=76" pytest numpy
+          python -m pip install "vapoursynth==${VAPOURSYNTH_VERSION}" pytest numpy
 
       # Before the wheel is installed: nothing else provides the namespace, so
       # a load failure here is the standalone plugin missing a runtime library.
