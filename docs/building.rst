@@ -154,7 +154,8 @@ with the graph's inputs and outputs pinned to fp32). The CUDA and DirectML
 execution providers have no engine-level fp16 mode of their own — TensorRT
 does, and keeps using the fp32 file — so this sibling is what an explicit
 ``onnx_provider="cuda"`` or ``"directml"`` loads at the default ``"fp16"``
-precision. It needs only the pip ``onnxruntime`` package for its converter.
+precision. It needs only the pip ``onnxruntime`` and ``onnx`` packages for
+its converter.
 
 Self-Contained Plugin Builds
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

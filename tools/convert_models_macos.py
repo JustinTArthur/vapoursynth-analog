@@ -13,7 +13,8 @@ converted at fp16 on Apple silicon so it can run on the Neural Engine (see
 ``_fp16_safe``).
 
 Run after tools/fetch_models.py. Requires a converter venv:
-    pip install coremltools onnx2torch torch onnx
+    pip install "coremltools<10" onnx2torch torch "onnx<2"
+(add "numpy<2" on an Intel Mac, whose last torch wheels predate NumPy 2).
 
 Usage:
     python tools/convert_models_macos.py \

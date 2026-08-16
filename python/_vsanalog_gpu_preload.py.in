@@ -77,6 +77,26 @@ def _site_roots():
     return roots
 
 
+def _add_to_path(directory):
+    """Put a vendor directory on the process PATH (Windows only).
+
+    os.add_dll_directory covers loads that opt into LOAD_LIBRARY_SEARCH_*,
+    which a vendor library's own helpers need not do: TensorRT loads
+    nvinfer_builder_resource_sm<arch>_10.dll — the per-architecture kernel
+    resource its builder needs, ~170 MB, one of eight, so not preloadable
+    from the table — through a plain LoadLibrary by bare name at engine build
+    time. That search reads PATH, which is how a normal TensorRT install
+    advertises its lib directory, and without it engine building fails with
+    "Unable to load library: nvinfer_builder_resource_sm86_10.dll: 126".
+    """
+    import os
+
+    current = os.environ.get("PATH", "")
+    if directory.lower() in (p.lower() for p in current.split(os.pathsep)):
+        return
+    os.environ["PATH"] = directory + os.pathsep + current if current else directory
+
+
 def preload():
     global _done
     if _done:
@@ -131,6 +151,7 @@ def preload():
                             dll_dir_handles.append(
                                 os.add_dll_directory(str(path.parent))
                             )
+                            _add_to_path(str(path.parent))
                             handle = ctypes.WinDLL(str(path))
                         else:
                             handle = ctypes.CDLL(
@@ -146,7 +167,10 @@ def preload():
         if handle is None and name not in _loaded:
             try:
                 if windows:
-                    handle = ctypes.WinDLL(name)
+                    # winmode=0 is the classic search order, which includes
+                    # PATH; ctypes' default since Python 3.8 does not, and a
+                    # toolkit install advertises itself through PATH alone.
+                    handle = ctypes.WinDLL(name, winmode=0)
                 else:
                     handle = ctypes.CDLL(name, mode=os.RTLD_NOW | os.RTLD_GLOBAL)
                 _loaded[name] = "system"

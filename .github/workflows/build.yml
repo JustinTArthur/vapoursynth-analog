@@ -85,8 +85,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      # meson-python configures the tree before it can `meson dist`, so the
+      # sdist job needs the same VapourSynth pkg-config file the builds use.
+      # -Dep=none keeps that configure from wanting an ONNX Runtime; the ep
+      # choice is not baked into the sdist.
       - name: Build sdist
-        run: pipx run build --sdist -o dist/
+        run: |
+          python -m pip install --quiet "vapoursynth==${VAPOURSYNTH_VERSION}" build
+          PKG_CONFIG_PATH="$(vapoursynth get-pkgconfig-dir)" \
+            python -m build --sdist -o dist/ -Csetup-args="-Dep=none"
       - uses: actions/upload-artifact@v6
         with:
           name: vsanalog-sdist
@@ -171,7 +181,11 @@ jobs:
       - name: Convert models to CoreML
         run: |
           python3.11 -m venv .venv-coreml || python3 -m venv .venv-coreml
-          .venv-coreml/bin/pip install --quiet coremltools onnx2torch torch onnx
+          # Converter-only venv; nothing here ships. Majors are capped so a
+          # 2.0 can't break the conversion unannounced. numpy<2: the last
+          # torch wheels for x86_64 macOS (2.2.x) were compiled against
+          # NumPy 1 and refuse to load a NumPy 2 install.
+          .venv-coreml/bin/pip install --quiet "coremltools<10" onnx2torch torch "onnx<2" "numpy<2"
           .venv-coreml/bin/python tools/convert_models_macos.py \
             --python .venv-coreml/bin/python \
             --convert-script subprojects/chromadec/scripts/convert_coreml.py
@@ -382,7 +396,7 @@ jobs:
         if: matrix.ep == 'cuda'
         run: |
           python3 -m venv .venv-fp16
-          .venv-fp16/bin/pip install --quiet onnxruntime
+          .venv-fp16/bin/pip install --quiet "onnxruntime<2" "onnx<2"
           .venv-fp16/bin/python tools/convert_models_fp16.py
       - name: Build manylinux GPU wheel (${{ matrix.variant }})
         run: |
@@ -460,7 +474,7 @@ jobs:
             # AMD ships ONNX Runtime as a Python wheel: shared objects under
             # onnxruntime/capi/ and no headers at all. chromadec resolves
             # -Donnxruntime_root as <root>/lib + <root>/include, so assemble
-            # one from Microsoft's same-version CPU tarball (headers) and AMD
+            # one from the same-version Microsoft CPU tarball (headers) and AMD
             # objects (libraries). The MIGraphX attach goes through the generic
             # AppendExecutionProvider entry point, so no MIGraphX-specific
             # header is involved and the stock headers suffice.
@@ -472,10 +486,21 @@ jobs:
             rm -f /opt/ort/lib/libonnxruntime*.so*
             cp -a /tmp/ortwheel/onnxruntime/capi/libonnxruntime*.so* /opt/ort/lib/
             ln -sf "libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" /opt/ort/lib/libonnxruntime.so
+            # The plugin records the SONAME (libonnxruntime.so.1), which the
+            # wheel ships no file for; auditwheel resolves by that name.
+            soname=$(readelf -d "/opt/ort/lib/libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" | sed -n "s/.*SONAME.*\[\(.*\)\].*/\1/p")
+            ln -sf "libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" "/opt/ort/lib/${soname}"
           fi
           export LD_LIBRARY_PATH="/opt/ort/lib:${VENDOR_LIB_DIR}:${LD_LIBRARY_PATH}"
 
           cp -a /src /tmp/build && cd /tmp/build
+          # libchromadec compiles its HIP pipeline TU through hipcc with a
+          # hand-listed include set that lacks the FFTW headers, which now
+          # come from the wrap rather than /usr/include. hipcc appends this
+          # to every compile it runs.
+          if [ "${EP}" = "migraphx" ]; then
+            export HIPCC_COMPILE_FLAGS_APPEND="-I/tmp/build/subprojects/fftw-3.3.11/api"
+          fi
           python3 -m build --wheel --no-isolation -o /tmp/dist/ \
             -Csetup-args="-Dep=${EP}" \
             -Csetup-args="-Dprefer_static=true" \
@@ -528,13 +553,14 @@ jobs:
           # RUNPATH entries alone. No GPU needed; nothing calls cuInit at
           # plugin load.
           if [ "${EP}" = "cuda" ]; then
-            # The runtime comes in through the wheel's own [cuda] extra, so a
-            # drifted pin set fails this leg instead of a user install. This
-            # also puts a full cuDNN layout on disk, which the preload-table
-            # check needs: cuDNN's sublibraries are dlopened by soname at
-            # runtime, so table coverage of them can only be checked against a
-            # real pip layout. [tensorrt] is metadata-only in CI — its libs
-            # are a multi-gigabyte install-time fetch from pypi.nvidia.com.
+            # The runtime comes in through the [cuda] extra of the wheel
+            # itself, so a drifted pin set fails this leg instead of a user
+            # install. This also puts a full cuDNN layout on disk, which the
+            # preload-table check needs: the cuDNN sublibraries are dlopened
+            # by soname at runtime, so table coverage of them can only be
+            # checked against a real pip layout. [tensorrt] is metadata-only
+            # in CI — its libs are a multi-gigabyte install-time fetch from
+            # pypi.nvidia.com.
             w=$(ls /wheelhouse/*.whl)
             python3 -m pip install --quiet --no-cache-dir "vsanalog[cuda] @ file://${w}"
 
@@ -597,7 +623,7 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .venv-fp16
-          .venv-fp16\Scripts\pip install --quiet onnxruntime
+          .venv-fp16\Scripts\pip install --quiet "onnxruntime<2" "onnx<2"
           .venv-fp16\Scripts\python tools\convert_models_fp16.py
 
       # The wheel bundles the DML-capable engine from the Windows ML lineage:
@@ -626,7 +652,9 @@ jobs:
           $whl = Get-ChildItem winml_wheel/*.whl | Select-Object -First 1
           python -m zipfile -e $whl.FullName winml_wheel/unpacked
 
-          $root = "$PWD/ort_root"
+          # Outside the checkout: Meson rejects an include_directories() that
+          # resolves to an absolute path inside the source tree.
+          $root = "$env:RUNNER_TEMP/ort_root"
           New-Item -ItemType Directory -Force -Path "$root/lib" | Out-Null
           Copy-Item -Recurse "$PWD/ort_extract/$ort/include" "$root/include"
           Copy-Item "$PWD/ort_extract/$ort/lib/onnxruntime.lib" "$root/lib/"
@@ -756,13 +784,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # CUDA 13 split pieces of nvcc into their own subpackages: the
+          # host-side headers (include/crt/) into "crt" and the cicc front end
+          # into "nvvm"; 12.x has neither and its nvcc still ships both.
           - ep: cuda
             variant: cuda12
             cuda_toolkit: '12.8.0'
+            cuda_sub_packages: '["nvcc", "cudart", "cufft", "cufft_dev", "visual_studio_integration"]'
             ort_pkg: onnxruntime-win-x64-gpu_cuda12
           - ep: cuda
             variant: cuda13
             cuda_toolkit: '13.2.0'
+            cuda_sub_packages: '["nvcc", "crt", "nvvm", "cudart", "cufft", "cufft_dev", "visual_studio_integration"]'
             ort_pkg: onnxruntime-win-x64-gpu_cuda13
     runs-on: windows-2022
     steps:
@@ -794,7 +827,18 @@ jobs:
         with:
           cuda: ${{ matrix.cuda_toolkit }}
           method: 'network'
-          sub-packages: '["nvcc", "cudart", "cufft", "cufft_dev", "visual_studio_integration"]'
+          sub-packages: ${{ matrix.cuda_sub_packages }}
+
+      # The toolkit action exports CUDA_PATH but leaves the runtime DLLs off
+      # PATH, so the load check below cannot resolve them. CUDA 13 also moved
+      # them from bin/ down into bin/x64/ on Windows (a real toolkit install
+      # puts both on the machine PATH); add whichever exist.
+      - name: Put the CUDA runtime DLLs on PATH
+        shell: pwsh
+        run: |
+          foreach ($dir in @("$env:CUDA_PATH\bin\x64", "$env:CUDA_PATH\bin")) {
+            if (Test-Path $dir) { $dir | Out-File -FilePath $env:GITHUB_PATH -Append }
+          }
 
       - name: Fetch NN models
         run: python tools/fetch_models.py
@@ -806,7 +850,7 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .venv-fp16
-          .venv-fp16\Scripts\pip install --quiet onnxruntime
+          .venv-fp16\Scripts\pip install --quiet "onnxruntime<2" "onnx<2"
           .venv-fp16\Scripts\python tools\convert_models_fp16.py
 
       - name: Install ONNX Runtime (${{ matrix.variant }})
@@ -814,8 +858,10 @@ jobs:
         run: |
           $ort = "${{ matrix.ort_pkg }}-$env:ORT_VERSION"
           Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$ort.zip" -OutFile ort.zip
-          Expand-Archive ort.zip -DestinationPath ort_extract
-          $root = "$PWD/ort_extract/$ort"
+          # Outside the checkout: Meson rejects an include_directories() that
+          # resolves to an absolute path inside the source tree.
+          Expand-Archive ort.zip -DestinationPath "$env:RUNNER_TEMP/ort_extract"
+          $root = "$env:RUNNER_TEMP/ort_extract/$ort"
           "ORT_EP_DLL_DIR=$root/lib" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ORT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
       # Headers and pkg-config metadata come bundled in the wheel itself, so
@@ -835,9 +881,15 @@ jobs:
         shell: pwsh
         run: |
           pip install delvewheel wheel build
+          # Meson passes nvcc no --std on Windows, expecting the host
+          # compiler's flag to carry it; but nvcc parses .cu host code in its
+          # own front end first, and the flag it forwards is clang-cl's
+          # /clang:-std=c++17, which the cl.exe it drives ignores anyway.
+          # Give nvcc the dialect directly; it derives cl's /std: from it.
           python -m build --wheel -o dist/ `
             -Csetup-args="-Dep=${{ matrix.ep }}" `
-            -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT"
+            -Csetup-args="-Dchromadec:onnxruntime_root=$env:ORT_ROOT" `
+            -Csetup-args="-Dcuda_args=-std=c++17"
           $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
 
           # ORT LoadLibrary's its execution providers by exact filename instead
@@ -886,10 +938,30 @@ jobs:
       - name: Load check
         shell: pwsh
         run: |
+          # pwsh does not abort on a native command's exit code, so without
+          # this a failing check_wheel_plugin.py just scrolls past.
+          $PSNativeCommandUseErrorActionPreference = $true
           .venv-vs\Scripts\pip install --quiet pytest
           .venv-vs\Scripts\pip install --quiet (Get-ChildItem wheelhouse/*.whl | Select-Object -First 1).FullName
           .venv-vs\Scripts\python tools/check_wheel_plugin.py
           .venv-vs\Scripts\python -m pytest -v tests/test_autoload.py
+
+      # The load check above resolves the vendor runtime from the toolkit on
+      # PATH, which says nothing about the pip layout the [cuda] extra
+      # installs — the preload table's own directory list. A wrong entry there
+      # is invisible to every other job on this runner, so assert that each
+      # table entry resolved to a pip path rather than to something already on
+      # the system. The Linux GPU legs cover their layout the same way.
+      - name: Load check through the [cuda] extra
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv .venv-extra
+          .venv-extra\Scripts\pip install --quiet "vapoursynth==$env:VAPOURSYNTH_VERSION"
+          $wheel = (Get-ChildItem wheelhouse/*.whl | Select-Object -First 1).FullName
+          .venv-extra\Scripts\pip install --quiet "vsanalog[cuda] @ file:///$($wheel -replace '\\','/')"
+          .venv-extra\Scripts\python tools/check_gpu_preload_pip_layout.py
+          .venv-extra\Scripts\python tools/check_wheel_plugin.py
 
       - uses: actions/upload-artifact@v6
         with:

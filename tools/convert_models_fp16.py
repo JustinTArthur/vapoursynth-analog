@@ -17,10 +17,11 @@ chroma_net v2 divides its input magnitudes by 128 to keep the spectrum
 inside fp16 range. Every other bundled model overflows it or breaks on fp16
 index math (see libchromadec's docs/nn-models.md).
 
-Run after tools/fetch_models.py. Requires the pip `onnxruntime` package
-(only its bundled onnxruntime.transformers.float16 converter is used here;
-no ONNX Runtime session is created, so a plain CPU wheel is enough):
-    pip install onnxruntime
+Run after tools/fetch_models.py. Requires the pip `onnxruntime` and `onnx`
+packages (only onnxruntime's bundled onnxruntime.transformers.float16
+converter is used here, and it works on `onnx` model protos; no ONNX Runtime
+session is created, so a plain CPU wheel is enough):
+    pip install "onnxruntime<2" "onnx<2"
 
 Usage:
     python tools/convert_models_fp16.py

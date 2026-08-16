@@ -34,6 +34,12 @@ project('vapoursynth-analog', 'cpp',
 # VapourSynth
 vapoursynth_dep = dependency('vapoursynth', version: '>=55')
 
+# dlopen/dladdr for src/gpupreload.cpp and libchromadec's runtime provider
+# loading. A no-op where they live in libc; still a separate libdl on
+# glibc < 2.34, which the manylinux_2_28 x86_64 wheel builds against.
+cpp = meson.get_compiler('cpp')
+dl_dep = cpp.find_library('dl', required: false)
+
 # libchromadec — the Qt-free C-ABI chroma decoder, pulled in as a Meson git
 # wrap (see subprojects/chromadec.wrap) and linked statically. It vendors its
 # own SQLite (absorbed via link_whole) and optionally links ONNX Runtime for
@@ -92,7 +98,8 @@ chromadec_dep = dependency('chromadec', default_options: chromadec_opts)
 # preloaded library satisfies every later one's dependency on it. CUDA 12
 # wheels install per-component directories (nvidia/<pkg>/lib) where CUDA 13
 # consolidates under nvidia/cu13/, hence the per-major dir lists; TensorRT
-# ships in tensorrt_libs on both.
+# ships in tensorrt_libs on both. The cu13 wheels are multi-arch on Windows
+# and put the DLLs one level down in bin/x86_64, unlike their Linux lib/.
 gpu_runtime_name = 'none'
 gpu_preload_entries = []
 if ep == 'cuda' and not is_darwin
@@ -102,13 +109,13 @@ if ep == 'cuda' and not is_darwin
     if host_machine.system() == 'windows'
         if cuda_major == '13'
             gpu_preload_entries = [
-                ['cudart64_13.dll',     ['nvidia/cu13/bin', 'nvidia/cuda_runtime/bin']],
-                ['nvrtc64_130_0.dll',   ['nvidia/cu13/bin', 'nvidia/cuda_nvrtc/bin']],
-                ['cublasLt64_13.dll',   ['nvidia/cu13/bin', 'nvidia/cublas/bin']],
-                ['cublas64_13.dll',     ['nvidia/cu13/bin', 'nvidia/cublas/bin']],
-                ['curand64_10.dll',     ['nvidia/cu13/bin', 'nvidia/curand/bin']],
-                ['cufft64_12.dll',      ['nvidia/cu13/bin', 'nvidia/cufft/bin']],
-                ['cudnn64_9.dll',       ['nvidia/cudnn/bin', 'nvidia/cu13/bin']],
+                ['cudart64_13.dll',     ['nvidia/cu13/bin/x86_64', 'nvidia/cuda_runtime/bin']],
+                ['nvrtc64_130_0.dll',   ['nvidia/cu13/bin/x86_64', 'nvidia/cuda_nvrtc/bin']],
+                ['cublasLt64_13.dll',   ['nvidia/cu13/bin/x86_64', 'nvidia/cublas/bin']],
+                ['cublas64_13.dll',     ['nvidia/cu13/bin/x86_64', 'nvidia/cublas/bin']],
+                ['curand64_10.dll',     ['nvidia/cu13/bin/x86_64', 'nvidia/curand/bin']],
+                ['cufft64_12.dll',      ['nvidia/cu13/bin/x86_64', 'nvidia/cufft/bin']],
+                ['cudnn64_9.dll',       ['nvidia/cudnn/bin', 'nvidia/cu13/bin/x86_64']],
                 ['nvinfer_10.dll',      ['tensorrt_libs']],
                 ['nvonnxparser_10.dll', ['tensorrt_libs']],
             ]
@@ -176,7 +183,7 @@ if ep == 'cuda' and not is_darwin
         'engines_runtime_compiled', 'engines_tensor_ir', 'adv', 'cnn', 'ext',
     ]
     if host_machine.system() == 'windows'
-        cudnn_dirs = cuda_major == '13' ? ['nvidia/cudnn/bin', 'nvidia/cu13/bin'] \
+        cudnn_dirs = cuda_major == '13' ? ['nvidia/cudnn/bin', 'nvidia/cu13/bin/x86_64'] \
                                         : ['nvidia/cudnn/bin']
         foreach part : cudnn_family
             gpu_dlopen_entries += [['cudnn_' + part + '64_9.dll', cudnn_dirs]]
@@ -343,6 +350,7 @@ shared_library(
     dependencies: [
         vapoursynth_dep.partial_dependency(compile_args: true, includes: true),
         chromadec_dep,
+        dl_dep,
     ],
     install: true,
     install_dir: plugin_install_dir,
@@ -351,4 +359,10 @@ shared_library(
     link_args: vsanalog_link_args,
     link_depends: vsanalog_symbol_file,
     gnu_symbol_visibility: 'hidden',
+    # libchromadec's archive carries CUDA objects on the GPU builds, which
+    # would make Meson link the plugin with nvcc; its import-library naming
+    # on Windows disagrees with what nvcc's link.exe produces, and no device
+    # link step is needed (no relocatable device code), so keep the C++
+    # linker throughout.
+    link_language: 'cpp',
 )

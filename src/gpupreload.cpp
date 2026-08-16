@@ -10,11 +10,14 @@
 #include "chdlog.h"
 #include "gpupreload_config.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cwctype>
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -91,6 +94,50 @@ bool loadByPath(const std::filesystem::path &path, std::string *outError)
 #endif
 }
 
+// Put a vendor directory on the process PATH, Windows only.
+//
+// LOAD_WITH_ALTERED_SEARCH_PATH above only covers a library's own link-time
+// dependencies. TensorRT loads nvinfer_builder_resource_sm<arch>_10.dll — the
+// per-architecture kernel resource its builder needs, ~170 MB, one of eight,
+// so not preloadable from the table — with a plain LoadLibrary by bare name
+// when it first builds an engine. That search reads PATH, which is how a
+// normal TensorRT install advertises its lib directory; without it engine
+// building fails with "Unable to load library:
+// nvinfer_builder_resource_sm86_10.dll: 126".
+void addToSearchPath(const std::filesystem::path &dir)
+{
+#if defined(_WIN32)
+    if (dir.empty()) return;
+    const std::wstring wanted = dir.wstring();
+    std::wstring current;
+    if (const DWORD len = GetEnvironmentVariableW(L"PATH", nullptr, 0); len > 0) {
+        current.resize(len);
+        const DWORD got = GetEnvironmentVariableW(L"PATH", current.data(), len);
+        current.resize(got);
+    }
+    auto icaseEqual = [](std::wstring_view a, std::wstring_view b) {
+        return a.size() == b.size() &&
+               std::equal(a.begin(), a.end(), b.begin(), [](wchar_t x, wchar_t y) {
+                   return towlower(x) == towlower(y);
+               });
+    };
+    for (size_t start = 0; start <= current.size();) {
+        const size_t end = current.find(L';', start);
+        const size_t stop = end == std::wstring::npos ? current.size() : end;
+        if (icaseEqual(std::wstring_view(current).substr(start, stop - start), wanted)) {
+            return;
+        }
+        if (end == std::wstring::npos) break;
+        start = end + 1;
+    }
+    const std::wstring updated =
+        current.empty() ? wanted : wanted + L';' + current;
+    SetEnvironmentVariableW(L"PATH", updated.c_str());
+#else
+    (void)dir;  // POSIX resolves the siblings through the loaded library itself.
+#endif
+}
+
 bool loadByName(const char *name)
 {
 #if defined(_WIN32)
@@ -162,6 +209,7 @@ void loadTable(const std::vector<PreloadEntry> &table,
                 if (loadByPath(candidate, &loadError)) {
                     chdlog::debug("GPU runtime preload: pinned " +
                                   candidate.string());
+                    addToSearchPath(candidate.parent_path());
                     loaded = true;
                 } else {
                     // A present-but-unloadable pip copy is worth saying out
