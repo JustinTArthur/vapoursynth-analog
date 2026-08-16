@@ -7,9 +7,9 @@ and signals.
 details including API reference.
 
 ## High-level Python API
-If installed as a Python distribution (e.g. with `pip`), the `vsanalog` Python
-module wraps the plugin's lower-level API with a type-hinted interface that
-loads the plugin automatically.
+If installed as a Python distribution (e.g. with `pip` or `uv`), the `vsanalog`
+Python module wraps the plugin's lower-level API with a type-hinted interface
+that loads the plugin automatically.
 
 The primary function provided by the high-level API is
 `vsanalog.decode_4fsc_video(…)`, which decodes 4𝑓𝑠𝑐-sampled analog video
@@ -29,13 +29,22 @@ import vsanalog
 import vsdeinterlace  # from vsjetpack
 
 src = vsanalog.decode_4fsc_video(
-    './Sources/my_home_video.luma.tbc',
-    './Sources/my_home_movie.chroma.tbc',
+    './Sources/my_home_video.tbc',
+    './Sources/my_home_movie_chroma.tbc',
     decoder='ntsc3d'
 )
-editable = src.resize.Point(format=vs.YUV444P16)
-deinterlaced = vsdeinterlace.QTempGaussMC(editable).deinterlace()
-deinterlaced.set_output(0)
+deinterlaced = vsdeinterlace.QTempGaussMC(src).deinterlace()
+modern = vsanalog.modernize_chromaticity(
+  deinterlaced,
+  primaries_in_s='ntsc-1953',
+  output_preset='hdtv'
+)
+universal = modern.resize.Spline36(
+  format=vs.YUV420P8,
+  chromaloc=vs.CHROMA_LEFT,
+  dither_type='random'
+)
+universal.set_output(0)
 ```
 
 ## Low-level VapourSynth Plugin API
@@ -43,15 +52,11 @@ Whether installed as a Python distribution or if the plugin library is dropped
 in a VapourSynth plugins directory, the plugin exposes a namespace named 
 `analog` available on the `vapoursynth.core` object. Example:
 ```python
-import vapoursynth as vs
-src = vs.core.analog.decode_4fsc_video(
+from vapoursynth import core
+src = core.analog.decode_4fsc_video(
   'my_big_production.tbc',
   dropout_correct=True
 )
-editable = src.resize.Point(format=vs.YUV444P16)
-field_match_ref = src.resize.Point(format=vs.YUV444P8)
-field_matched = field_match_ref.vivtc.VFM(clip2=editable)
-detelecined = field_matched.vivtc.VDecimate()
 ```
 
 ## Layout
@@ -127,12 +132,19 @@ plugin.
   nnTransform3D. ldzeug2 moves more 4𝑓𝑠𝑐 processing to the Python domain for
   flexible scripting; it focuses on composite NTSC, ST 170, and Japan format
   signals.
-* ld-decode-tools comes with an `ld-chroma-decoder` tool to decode TBC
-  files to component R′G′B′ or Y′Cb′Cr′ stream output for use in command line
-  workflows and an `ld-dropout-correct` tool for generating a pre-corrected
-  intermediate based on upstream dropout detection.
+* [tbc-tools](https://github.com/harrypm/tbc-tools) comes with an
+  `ld-chroma-decoder` tool to decode TBC files to component R′G′B′ or
+  Y′ C′b C′r stream output for use in command line workflows and an
+  `ld-dropout-correct` tool for generating a pre-corrected intermediate based
+  on upstream dropout detection. Split from the original ld-decode project's
+  tools dir.
 * [tbc-video-export](https://github.com/JuniorIsAJitterbug/tbc-video-export) is
   a convenient wrapper around ld-chroma-decoder and ffmpeg for producing
   digital video files from TBC files. It’s handy if you need to deliver a
   lossless interlaced intermediate to someone else for filtering or color
   grading.
+* [decode-orc](https://github.com/decode-orc/decode-orc) helps orchestrate
+  processing and filtration of TBC/CVBS signal data, providing a filter graph
+  like VapourSynth's but in a closer-to-analog space. Also provides a plugin
+  API and an R′G′B′ or Y′ C′b C′r output sink with similar code heritage
+  as libchromadec's.
