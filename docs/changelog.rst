@@ -1,7 +1,7 @@
 Changelog
 =========
-0.3.0 (Not Yet Released)
-------------------------
+0.3.0
+-----
 - Replaced the vendored ld-decode-tools submodule with `libchromadec
   <https://github.com/JustinTArthur/libchromadec>`_, a Qt-free C-ABI library
   pulled in as a Meson git wrap and linked statically, along with the trimmed
