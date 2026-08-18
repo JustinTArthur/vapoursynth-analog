@@ -27,8 +27,8 @@ GPU-Accelerated Neural Decoding
 Wheels carrying a GPU execution provider are too large for PyPI and are
 published on the project's own package index, ``https://py.justinarthur.com``:
 
-- **Linux:** CUDA/TensorRT (Nvidia), MIGraphX (AMD)
-- **Windows:** CUDA/TensorRT (Nvidia)
+- **Linux:** TensorRT/CUDA (Nvidia), MIGraphX (AMD)
+- **Windows:** TensorRT/CUDA (Nvidia)
 
 DirectML needs no separate wheel: the PyPI Windows wheel bundles the
 DML-capable Windows ML engine and drives any DX12 GPU on its own.
@@ -58,8 +58,9 @@ otherwise ``pip install --upgrade`` finds only the PyPI wheel and replaces the
 GPU one.
 
 The channel wheels provide the same functions as the PyPI wheel; the extra
-provider is selected with the ``onnx_provider`` argument (or left to
-``auto``). Each wheel is also linked directly from its channel page, and its
+providers are selected with the ``onnx_provider`` argument (or left to
+``auto``, which on the Nvidia wheels tries TensorRT ahead of CUDA). Each
+wheel is also linked directly from its channel page, and its
 name carries the build tag — ``0cuda12``, ``0cuda13``, ``0migraphx`` — if you
 prefer to fetch by URL.
 
@@ -85,18 +86,19 @@ prefer to fetch by URL.
    gracefully rather than one that needs a vendor runtime present, use the
    PyPI wheel.
 
-For the CUDA wheels, the easiest way to supply the runtime is from PyPI, into
-the same environment as the wheel — no ``LD_LIBRARY_PATH``/``PATH`` setup, and
-the versions stay pinned with the rest of the environment. Each CUDA wheel
-declares the matching packages as extras, so the install is one line:
+For the Nvidia wheels, the easiest way to supply the runtime is from PyPI,
+into the same environment as the wheel — no ``LD_LIBRARY_PATH``/``PATH``
+setup, and the versions stay pinned with the rest of the environment. Each
+wheel declares the matching packages as extras, so the install is one line:
 
 .. code-block:: bash
 
-    # CUDA runtime from PyPI, pinned to the wheel's toolkit major:
-    pip install "vsanalog[cuda]" --extra-index-url https://py.justinarthur.com/cu13/
-
-    # The same plus TensorRT (see the note below):
+    # TensorRT plus the CUDA runtime it sits on, pinned to the wheel's
+    # toolkit major — the fastest neural decoding these wheels offer:
     pip install "vsanalog[tensorrt]" --extra-index-url https://py.justinarthur.com/cu13/
+
+    # The CUDA runtime alone (see the note below):
+    pip install "vsanalog[cuda]" --extra-index-url https://py.justinarthur.com/cu13/
 
 The extras differ per channel — a ``cu12`` wheel pins the ``-cu12`` package
 names, a ``cu13`` wheel the CUDA 13 ones — so there is nothing to spell by
@@ -114,11 +116,11 @@ reported on the VapourSynth log, visible through ``core.add_log_handler()``.
 
 .. note::
 
-   **TensorRT is not bundled**, and most users will not have it. Its absence is
-   normal and costs nothing but the TensorRT speedup: the default
-   ``onnx_provider="auto"`` tries TensorRT first, finds it unusable, and moves
-   on to CUDA by itself. The decoded output is identical either way — only the
-   provider changes.
+   **TensorRT is not bundled** in the wheel; the ``[tensorrt]`` extra is what
+   supplies it. Its absence is not an error and costs nothing but the TensorRT
+   speedup: the default ``onnx_provider="auto"`` tries TensorRT first, finds it
+   unusable, and moves on to CUDA by itself. The decoded output is identical
+   either way — only the provider, and the speed, changes.
 
    If you do install it, it must be **10.x** (``libnvinfer.so.10``), which is
    what the bundled ONNX Runtime loads. The ``[tensorrt]`` extra pins exactly

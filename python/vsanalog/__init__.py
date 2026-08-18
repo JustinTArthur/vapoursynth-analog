@@ -97,10 +97,10 @@ _NN_DECODER_DEFAULT_VERSION = {
 # Only ldzeug2_luma_sep* honour the chroma-bandpass toggle.
 _BANDPASS_DECODERS = {"ldzeug2_luma_sep", "ldzeug2_luma_sep_frame"}
 
-# Execution providers accepted by the plugin. Aliases (gpu->cuda, trt->tensorrt)
+# Execution providers accepted by the plugin. Aliases (trt->tensorrt, gpu->cuda)
 # are resolved by libchromadec; an unavailable accelerator falls back to CPU.
 _NN_PROVIDERS = frozenset({
-    "auto", "cpu", "cuda", "gpu", "tensorrt", "trt", "migraphx", "directml", "coreml",
+    "auto", "cpu", "tensorrt", "trt", "cuda", "gpu", "migraphx", "directml", "coreml",
 })
 
 # Providers with no engine-level fp16 mode (unlike TensorRT's
@@ -244,7 +244,8 @@ def decode_4fsc_video(
     clip.
 
     The source format is detected from the file extension. RAW CVBS encodings
-    (unscaled ADC captures) are not supported and are rejected.
+    (unscaled ADC captures) are not supported and are rejected, as is Y/Pb/Pr
+    component video (a ``pr_source`` alongside the other two).
 
     """
     _validate_choice("color_family", color_family, _COLOR_FAMILIES)

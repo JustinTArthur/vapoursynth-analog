@@ -14,6 +14,7 @@ Documentation
 
     installation
     python-api
+    recipes
     plugin-api
     building
     changelog

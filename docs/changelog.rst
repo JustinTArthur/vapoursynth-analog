@@ -1,5 +1,10 @@
 Changelog
 =========
+.. Label every version heading (``.. _vX.Y.Z:``): headings of bare digits get
+   no id of their own, only a positional ``idN`` that shifts each release.
+
+.. _v0.3.0:
+
 0.3.0
 -----
 - Replaced the vendored ld-decode-tools submodule with `libchromadec
@@ -168,11 +173,15 @@ Changelog
   first. Its bundled dependency DLLs were reachable only through a search path
   that the ``vsanalog`` import registers and the autoloader never runs.
 
+.. _v0.2.3:
+
 0.2.3
 -----
 - Fix fractional IRE value input for blank/black/white in JSON to SQLite
   conversion.
 - If chroma metadata sidecar is missing, fallback to luma/main metadata.
+
+.. _v0.2.2:
 
 0.2.2
 -----
@@ -180,9 +189,13 @@ Changelog
 - Y/C-separated decodes scale chroma planes against the chroma 4fsc's own
   IRE excursion instead of luma signal’s, fixing potential mismatch.
 
+.. _v0.2.1:
+
 0.2.1
 -----
 - Windows wheel now contains full dependency set.
+
+.. _v0.2.0:
 
 0.2.0
 ------------------
@@ -193,6 +206,8 @@ Changelog
   serve any compatible Python interpreter on a given platform.
 - More comprehensive documentation.
 
+.. _v0.1.1:
+
 0.1.1
 -----
 New build pipeline with reasonably-packaged plugin libraries plus Python
@@ -200,6 +215,8 @@ sdists and wheels that can support VapourSynth's upcoming pip-installable
 plugin flow. The old drop-in plugin libraries continue to work.
 
 No fixes or feature changes to the plugin itself.
+
+.. _v0.1.0:
 
 0.1.0
 -----
