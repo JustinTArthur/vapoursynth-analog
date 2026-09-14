@@ -148,10 +148,14 @@ started from the original ld-chroma-decoder. It's pulled in as a Meson git wrap
 and linked statically, along with the trimmed SQLite it bundles, so this plugin
 has no Qt or system-SQLite dependency at all. libchromadec supplies the composite
 separation/transformation decoders (NTSC/PAL/SECAM/mono), the CVBS and TBC
-readers, dropout masks and corrections, and the neural-network decoders.
+readers, dropout masks and corrections, and the neural-network decoders. The
+`hvd2d` and `hvd3d` decoders are vrunk11's
+[hvd-core](https://github.com/vrunk11/hvd-cvbs-decoding), the
+holographic-variational Y/C separation engine that libchromadec bundles and
+links statically as well.
 
 To ease legal distribution, this project is available under the GPL 3 or later
-license, matching libchromadec and its inherited ld-decode history.
+license, matching libchromadec, hvd-core, and the inherited ld-decode history.
 
 Machine learning models have been employed at times in the development of this
 plugin.

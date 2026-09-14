@@ -11,7 +11,7 @@ Both pull in `libchromadec
 <https://github.com/JustinTArthur/libchromadec>`_ — the decoding library — as
 a Meson `git wrap <https://mesonbuild.com/Wrap-dependency-system-manual.html>`_
 declared in ``subprojects/chromadec.wrap``, and link it statically. Meson
-fetches it (and libchromadec's own bundled SQLite) on first configure, so the
+fetches it (and the SQLite and hvd-core it bundles) on first configure, so the
 first build of a fresh checkout needs network access.
 
 Building the VapourSynth Plugin
@@ -31,11 +31,19 @@ Build Dependencies
 - `VapourSynth <https://www.vapoursynth.com/>`_ (>= R55) development headers
 
 Neither FFTW3 nor SQLite is a build dependency. Both are built from source and
-linked statically into the plugin, via ``force_fallback_for=sqlite3,fftw3`` in
-``meson.build``: SQLite from the trimmed amalgamation libchromadec ships, and
+linked statically into the plugin, via ``force_fallback_for=sqlite3,fftw3,fftw3f``
+in ``meson.build``: SQLite from the trimmed amalgamation libchromadec ships, and
 `FFTW3 <http://www.fftw.org/>`_ from ``subprojects/fftw3.wrap``, which downloads
 the upstream tarball and builds it with the Meson port in
-``subprojects/packagefiles/fftw3/``. Qt is no longer used at all.
+``subprojects/packagefiles/fftw3/``, once in double precision for the
+Transform-PAL and NN decoders and once in single precision (``fftw3f``) for
+hvd-core, the engine behind ``hvd2d`` and ``hvd3d``. hvd-core itself comes
+from libchromadec's wrap. Its solver loops thread with OpenMP where the
+toolchain provides it (GCC/Clang's libgomp/libomp, MSVC's ``/openmp``,
+Homebrew ``libomp`` with Apple Clang) and fall back to serial loops otherwise;
+``-Dhvd-core:openmp=disabled`` forces the serial build, which is what the
+standalone plugin tarballs use to stay a single file. Qt is no longer used at
+all.
 
 Building FFTW rather than installing it is partly a performance decision and
 partly a correctness one. The packaged builds ship the wrong codelets for several

@@ -3,6 +3,19 @@ Changelog
 .. Label every version heading (``.. _vX.Y.Z:``): headings of bare digits get
    no id of their own, only a positional ``idN`` that shifts each release.
 
+.. _v0.4.0:
+
+0.4.0
+-----
+- Added the ``"hvd2d"`` and ``"hvd3d"`` decoders for NTSC and PAL: vrunk11's
+  holographic-variational Y/C separation, from the hvd-core engine that
+  libchromadec 0.2.0 bundles. ``"hvd3d"`` runs the temporal field-sequence
+  pipeline and is much slower than ``"hvd2d"``.
+- Updated libchromadec to 0.2.0. Its readers now bound their field cache, so
+  memory no longer grows with every frame decoded from a long capture, and
+  Y/C pairs with no ld-decode sidecar are decoded plane by plane instead of
+  being summed into a composite and separated again.
+
 .. _v0.3.0:
 
 0.3.0

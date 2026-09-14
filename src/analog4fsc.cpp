@@ -29,6 +29,8 @@ chd_decoder_kind_t parseDecoder(const std::string &name) {
     if (name == "pal2d") return CHD_DEC_PAL_2D;
     if (name == "transform2d") return CHD_DEC_TRANSFORM_2D;
     if (name == "transform3d") return CHD_DEC_TRANSFORM_3D;
+    if (name == "hvd2d") return CHD_DEC_HVD_2D;
+    if (name == "hvd3d") return CHD_DEC_HVD_3D;
     if (name == "nntransform3d") return CHD_DEC_NN_TRANSFORM3D;
     if (name == "ldzeug2_color_cnn") return CHD_DEC_LDZEUG_COLOR_CNN;
     if (name == "ldzeug2_luma_sep") return CHD_DEC_LDZEUG_LUMA_SEP;

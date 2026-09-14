@@ -849,45 +849,62 @@ rdft_simd_codelets = [
 # in simd-support/, which has to stay runnable on a CPU without the extension.
 # LTO is forced off for the same reason: it would let the linker inline an AVX2
 # codelet into a caller compiled for the baseline and fault on older hardware.
-simd_objects = []
-foreach isa : enabled_isas
-    isa_sources = []
-    foreach d : isa[3]
-        foreach f : dft_simd_codelets
-            isa_sources += 'dft/simd/' + d + '/' + f
+#
+# Precision is the same source tree built twice, matching upstream's own
+# `./configure --enable-float` (a second build tree over identical sources):
+# -DFFTW_SINGLE switches the typedef'd float type and the symbol-prefix macros
+# in the sources themselves (fftw_* vs fftwf_*), so the two libraries carry
+# disjoint symbols and can coexist in one binary. hvd-core is the fftw3f
+# consumer; everything else here wants double.
+precisions = [
+    ['fftw3', []],
+    ['fftw3f', ['-DFFTW_SINGLE']],
+]
+
+foreach precision : precisions
+    lib_name = precision[0]
+    precision_args = precision[1]
+
+    simd_objects = []
+    foreach isa : enabled_isas
+        isa_sources = []
+        foreach d : isa[3]
+            foreach f : dft_simd_codelets
+                isa_sources += 'dft/simd/' + d + '/' + f
+            endforeach
+            foreach f : rdft_simd_codelets
+                isa_sources += 'rdft/simd/' + d + '/' + f
+            endforeach
         endforeach
-        foreach f : rdft_simd_codelets
-            isa_sources += 'rdft/simd/' + d + '/' + f
-        endforeach
+        simd_objects += static_library(
+            lib_name + '_' + isa[0].underscorify() + '_codelets',
+            isa_sources,
+            config_h,
+            include_directories : fftw_inc,
+            c_args : isa[2] + extra_c_args + precision_args,
+            gnu_symbol_visibility : 'hidden',
+            override_options : ['b_lto=false'],
+            pic : true,
+        ).extract_all_objects(recursive : false)
     endforeach
-    simd_objects += static_library(
-        'fftw3_' + isa[0].underscorify() + '_codelets',
-        isa_sources,
+
+    libfftw = static_library(lib_name,
+        fftw_core_sources,
         config_h,
+        objects : simd_objects,
         include_directories : fftw_inc,
-        c_args : isa[2] + extra_c_args,
+        c_args : extra_c_args + precision_args,
         gnu_symbol_visibility : 'hidden',
         override_options : ['b_lto=false'],
         pic : true,
-    ).extract_all_objects(recursive : false)
+        install : false,
+    )
+
+    fftw_dep = declare_dependency(
+        link_with : libfftw,
+        include_directories : fftw_api_inc,
+        dependencies : m_dep.found() ? [m_dep] : [],
+    )
+
+    meson.override_dependency(lib_name, fftw_dep)
 endforeach
-
-libfftw3 = static_library('fftw3',
-    fftw_core_sources,
-    config_h,
-    objects : simd_objects,
-    include_directories : fftw_inc,
-    c_args : extra_c_args,
-    gnu_symbol_visibility : 'hidden',
-    override_options : ['b_lto=false'],
-    pic : true,
-    install : false,
-)
-
-fftw3_dep = declare_dependency(
-    link_with : libfftw3,
-    include_directories : fftw_api_inc,
-    dependencies : m_dep.found() ? [m_dep] : [],
-)
-
-meson.override_dependency('fftw3', fftw3_dep)

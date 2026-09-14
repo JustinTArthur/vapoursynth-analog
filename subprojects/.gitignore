@@ -10,3 +10,7 @@
 # is generated output, and committing it breaks the sdist: the redirect target
 # is a subproject source file, which `meson dist` does not ship.
 /sqlite3.wrap
+
+# Same story for hvd-core: libchromadec's own subprojects/ carries the wrap
+# that pins vrunk11's engine, and Meson promotes it here as a redirect.
+/hvd-core.wrap

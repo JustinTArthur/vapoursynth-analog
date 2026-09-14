@@ -72,7 +72,8 @@ Decoding
     :param decoder:
         Chroma decoder to use. Analytical: ``"ntsc1d"``, ``"ntsc2d"``,
         ``"ntsc3d"``, ``"ntsc3dnoadapt"``, ``"pal2d"``, ``"transform2d"``,
-        ``"transform3d"``, ``"secam"``, or ``"mono"``. Neural-network
+        ``"transform3d"``, ``"hvd2d"``, ``"hvd3d"``, ``"secam"``, or
+        ``"mono"``. Neural-network
         (NTSC only): ``"nntransform3d"``, ``"ldzeug2_color_cnn"``,
         ``"ldzeug2_luma_sep"``, ``"ldzeug2_luma_sep_frame"``. When ``None``, the
         decoder is chosen automatically based on the video system. See
@@ -256,6 +257,13 @@ The ``decoder`` parameter accepts the following values:
     * - ``"transform3d"``
       - PAL
       - 3D Transform PAL frequency-domain filter
+    * - ``"hvd2d"``
+      - NTSC, PAL
+      - Holographic-variational Y/C separation (hvd-core), woven-frame path
+    * - ``"hvd3d"``
+      - NTSC, PAL
+      - Holographic-variational Y/C separation through the temporal
+        field-sequence pipeline; much slower than ``"hvd2d"``
     * - ``"secam"``
       - SECAM
       - Line-sequential FM chroma; outputs ``YUV440PS`` (4:4:0), see

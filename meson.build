@@ -20,10 +20,12 @@ project('vapoursynth-analog', 'cpp',
         # and Fedora's x86_64 build has no AVX2/FMA. Transform-PAL and
         # nnTransform3D are FFTW-bound, so those codelets set their frame rate.
         # It also means an sdist install no longer silently loses Transform-PAL
-        # on a machine with no FFTW installed.
+        # on a machine with no FFTW installed. fftw3f (single precision) is the
+        # same wrap, built a second time from the identical sources with
+        # -DFFTW_SINGLE; libchromadec's bundled hvd-core is the consumer.
         #
         # Pass -Dforce_fallback_for= to link the system copies instead.
-        'force_fallback_for=sqlite3,fftw3',
+        'force_fallback_for=sqlite3,fftw3,fftw3f',
     ]
 )
 

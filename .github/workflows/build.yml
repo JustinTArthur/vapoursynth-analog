@@ -205,10 +205,13 @@ jobs:
       # wheel's plugin to load vendored libraries from a sibling package
       # directory, so that copy can't be dropped into a VapourSynth plugins
       # directory on its own. This build links everything but the system
-      # libraries and CoreML statically.
+      # libraries and CoreML statically; -Dhvd-core:openmp=disabled keeps
+      # hvd-core off Homebrew's libomp.dylib, which prefer_static does not
+      # cover, so the plugin stays a single file wherever libomp happens to
+      # be installed.
       - name: Build standalone plugin
         run: |
-          meson setup build_tarball -Dbuild_wheel=false -Dprefer_static=true
+          meson setup build_tarball -Dbuild_wheel=false -Dprefer_static=true -Dhvd-core:openmp=disabled
           meson compile -C build_tarball
           otool -L build_tarball/vsanalog.dylib
         env:
@@ -318,8 +321,13 @@ jobs:
           # Standalone plugin: auditwheel rewrites the wheel copy to load
           # vendored libraries from a sibling package directory, so the tarball
           # gets its own build instead. -Dep=none drops the ONNX Runtime link
-          # (and with it the NN decoders) to keep the plugin a single file.
-          meson setup /tmp/btar -Dbuild_wheel=false -Dep=none -Dprefer_static=true
+          # (and with it the NN decoders); -Dhvd-core:openmp=disabled drops
+          # hvd-core'"'"'s libgomp/libomp link for the same reason, since
+          # -Dprefer_static only covers this project'"'"'s own fftw/sqlite
+          # fallbacks and has no effect on the compiler-builtin openmp
+          # dependency, which always links the runtime dynamically. Together
+          # they keep the plugin a single file.
+          meson setup /tmp/btar -Dbuild_wheel=false -Dep=none -Dprefer_static=true -Dhvd-core:openmp=disabled
           meson compile -C /tmp/btar
           readelf -d /tmp/btar/vsanalog.so | grep NEEDED
           cp /tmp/btar/vsanalog.so /out/
@@ -770,12 +778,14 @@ jobs:
 
       # Separate from the wheel: delvewheel renames and relocates the DLLs the
       # wheel's plugin loads, so that copy only works inside the package. FFTW is
-      # static either way now, so this differs only in dropping ONNX Runtime,
-      # leaving a lone DLL that needs nothing but VapourSynth and the MSVC runtime.
+      # static either way now, so this differs in dropping ONNX Runtime and
+      # hvd-core's OpenMP link (clang-cl's libomp.dll, which prefer_static does
+      # not cover), leaving a lone DLL that needs nothing but VapourSynth and
+      # the MSVC runtime.
       - name: Build standalone plugin
         shell: pwsh
         run: |
-          meson setup build_tarball -Dbuild_wheel=false -Dep=none -Dprefer_static=true
+          meson setup build_tarball -Dbuild_wheel=false -Dep=none -Dprefer_static=true -Dhvd-core:openmp=disabled
           meson compile -C build_tarball
 
       - name: Package plugin tarball
