@@ -217,8 +217,11 @@ Decoding
     :type dropout_composite_or_luma_extra_sources: :py:class:`~collections.abc.Sequence`\[:py:class:`str` | :py:class:`~pathlib.Path`] | None
 
     :param dropout_chroma_extra_sources:
-        Additional chroma ``.tbc`` files for multi-source dropout correction
-        (for color-under formats).
+        Chroma ``.tbc`` files for multi-source dropout correction of a separate
+        chroma source. Paired by position with
+        ``dropout_composite_or_luma_extra_sources``, so each entry is the chroma
+        file of the capture at that position and the lists must be the same
+        length. Leave unset to correct only luma from the extra captures.
     :type dropout_chroma_extra_sources: :py:class:`~collections.abc.Sequence`\[:py:class:`str` | :py:class:`~pathlib.Path`] | None
 
     :rtype: :py:class:`VideoNode`
@@ -490,8 +493,10 @@ and chroma are sourced independently using FIR frequency separation to find
 the closest match for each.
 
 For multi-source correction, pass additional TBC captures of the same content
-via ``dropout_composite_or_luma_extra_sources`` (and
-``dropout_chroma_extra_sources`` for Y/C-separated formats). Sources are aligned
+via ``dropout_composite_or_luma_extra_sources``. For Y/C-separated formats, also
+list each capture's chroma file at the same position in
+``dropout_chroma_extra_sources`` to correct the chroma plane from those captures
+too; the two lists must then be the same length. Sources are aligned
 using VBI frame numbers when available (laserdisc CAV/CLV), falling back to
 sequential frame alignment for sources without VBI data (e.g. vhs-decode
 output).

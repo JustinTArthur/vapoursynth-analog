@@ -4,10 +4,90 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 vs = pytest.importorskip("vapoursynth")
 vsanalog = pytest.importorskip("vsanalog")
+
+
+def test_chroma_extras_need_a_chroma_source():
+    with pytest.raises(vs.Error, match="requires a separate chroma source"):
+        vsanalog.decode_4fsc_video(
+            "missing.tbc",
+            dropout_composite_or_luma_extra_sources=["extra.tbc"],
+            dropout_chroma_extra_sources=["extra_chroma.tbc"],
+        )
+
+
+@pytest.mark.parametrize("num_luma, num_chroma", [(0, 1), (2, 1)])
+def test_extra_source_lists_must_pair(num_luma, num_chroma):
+    with pytest.raises(vs.Error, match="paired by capture"):
+        vsanalog.decode_4fsc_video(
+            "missing.tbc",
+            "missing_chroma.tbc",
+            dropout_composite_or_luma_extra_sources=["extra.tbc"] * num_luma or None,
+            dropout_chroma_extra_sources=["extra_chroma.tbc"] * num_chroma,
+        )
+
+
+@pytest.fixture
+def clean_yc_extra(yc_tbc, tmp_path):
+    """The capture again as a second one with no dropouts flagged.
+
+    Only the luma file gets a sidecar, so opening the pair also covers the
+    fallback to a shared sidecar.
+    """
+    luma, chroma = yc_tbc
+    sidecar = luma.with_name(luma.name + ".json")
+    if not sidecar.exists():
+        pytest.skip("the Y/C capture needs a JSON sidecar")
+    meta = json.loads(sidecar.read_text())
+    for field in meta["fields"]:
+        field["dropOuts"] = {"fieldLine": [], "startx": [], "endx": []}
+
+    extra_luma = tmp_path / "extra.tbc"
+    extra_chroma = tmp_path / "extra_chroma.tbc"
+    extra_luma.symlink_to(luma)
+    extra_chroma.symlink_to(chroma)
+    (tmp_path / "extra.tbc.json").write_text(json.dumps(meta))
+    return str(extra_luma), str(extra_chroma)
+
+
+def _planes(clip, n):
+    with clip.get_frame(n) as f:
+        return [bytes(f[p]) for p in range(f.format.num_planes)]
+
+
+def test_paired_extras_correct_each_plane_from_its_own_file(yc_tbc, clean_yc_extra):
+    luma, chroma = (str(p) for p in yc_tbc)
+    extra_luma, extra_chroma = clean_yc_extra
+
+    def decode(**extras):
+        return vsanalog.decode_4fsc_video(luma, chroma, dropout_correct=True, **extras)
+
+    baseline = decode()
+    for n in range(min(60, baseline.num_frames)):
+        with baseline.get_frame(n) as f:
+            if f.props["AnalogDropoutsCorrected"]:
+                break
+    else:
+        pytest.skip("no corrected dropouts in the scanned frames of this capture")
+
+    luma_only = _planes(decode(dropout_composite_or_luma_extra_sources=[extra_luma]), n)
+    paired = _planes(
+        decode(
+            dropout_composite_or_luma_extra_sources=[extra_luma],
+            dropout_chroma_extra_sources=[extra_chroma],
+        ),
+        n,
+    )
+    base_planes = _planes(baseline, n)
+
+    assert luma_only[1:] == base_planes[1:]
+    assert paired[0] == luma_only[0]
+    assert paired[1:] != base_planes[1:]
 
 
 def _first_frame(clip):

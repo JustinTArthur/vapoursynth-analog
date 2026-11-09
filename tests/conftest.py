@@ -54,3 +54,16 @@ def secam_yc() -> tuple[Path, Path]:
             "SECAM luma + chroma capture pair to run this test"
         )
     return luma, chroma
+
+
+@pytest.fixture(scope="session")
+def yc_tbc() -> tuple[Path, Path]:
+    """A luma+chroma capture pair sharing one JSON sidecar, as vhs-decode writes."""
+    luma = _env_path("VSANALOG_TEST_YC_TBC")
+    chroma = _env_path("VSANALOG_TEST_YC_CHROMA_TBC")
+    if luma is None or chroma is None:
+        pytest.skip(
+            "set VSANALOG_TEST_YC_TBC and VSANALOG_TEST_YC_CHROMA_TBC to a "
+            "luma + chroma capture pair with dropouts to run this test"
+        )
+    return luma, chroma

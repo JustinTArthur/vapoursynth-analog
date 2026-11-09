@@ -128,18 +128,35 @@ void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
 
     // Open (libchromadec detects .tbc vs CVBS .cvbs/.cvbsy/.cvbsc by extension).
     const bool dual = (chromaSourcePath != nullptr);
+    const auto &extraLuma = opts->dropoutExtraLumaSources;
+    const auto &extraChroma = opts->dropoutExtraChromaSources;
+    if (!extraChroma.empty()) {
+        if (!dual) {
+            throw VSAnalogException(
+                "dropout_chroma_extra_sources requires a separate chroma source");
+        }
+        if (extraChroma.size() != extraLuma.size()) {
+            throw VSAnalogException(
+                "dropout_chroma_extra_sources has " + std::to_string(extraChroma.size()) +
+                " entries but dropout_composite_or_luma_extra_sources has " +
+                std::to_string(extraLuma.size()) + "; the lists are paired by capture");
+        }
+    }
+
     if (dual) {
         src->openYC(sourcePath, *chromaSourcePath, overridePtr);
     } else {
         src->openComposite(sourcePath, overridePtr);
     }
 
-    // Extra sources for multi-source dropout correction.
-    for (const auto &extra : opts->dropoutExtraLumaSources) {
-        src->addExtraComposite(extra);
-    }
-    for (const auto &extra : opts->dropoutExtraChromaSources) {
-        src->addExtraComposite(extra);
+    // Extra sources for multi-source dropout correction. Without chroma extras
+    // the luma list only supplies the composite or luma plane's candidates.
+    for (size_t i = 0; i < extraLuma.size(); i++) {
+        if (extraChroma.empty()) {
+            src->addExtraComposite(extraLuma[i]);
+        } else {
+            src->addExtraYC(extraLuma[i], extraChroma[i]);
+        }
     }
 
     const chd_video_info_t &vinfo = src->info();

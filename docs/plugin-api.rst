@@ -171,8 +171,11 @@ Decoding
         correction.
 
     :param str[] dropout_chroma_extra_sources:
-        Additional chroma ``.tbc`` files for multi-source dropout correction
-        (for color-under formats).
+        Chroma ``.tbc`` files for multi-source dropout correction of a separate
+        chroma source. Paired by position with
+        ``dropout_composite_or_luma_extra_sources``, so each entry is the chroma
+        file of the capture at that position and the lists must be the same
+        length. Leave unset to correct only luma from the extra captures.
 
     :param int annotate_dropouts:
         Set to 1 to record each frame's dropout regions in the

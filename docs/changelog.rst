@@ -3,6 +3,17 @@ Changelog
 .. Label every version heading (``.. _vX.Y.Z:``): headings of bare digits get
    no id of their own, only a positional ``idN`` that shifts each release.
 
+.. _v0.4.1:
+
+0.4.1 (Not Yet Released)
+------------------------
+- Fixed ``dropout_chroma_extra_sources`` adding its files to the luma plane's
+  dropout replacement candidates, which could copy chroma samples into luma or
+  fail with a misleading metadata error. Each file now corrects the chroma plane
+  and is paired by position with an entry in
+  ``dropout_composite_or_luma_extra_sources``. Lists of different lengths, or
+  chroma extras without a separate chroma source, now raise an error.
+
 .. _v0.4.0:
 
 0.4.0
