@@ -642,6 +642,31 @@ Examples:
     calmer = core.analog.amplify_chroma(vhs, 0.85)
 
 
+Execution providers
+-------------------
+
+.. function:: core.analog.set_onnx_provider_library(provider[, path, if_unset=False])
+
+    Names the shared library that provides an ONNX Runtime execution provider
+    as a plugin, for an ONNX Runtime that doesn't build it in. ROCm 10 ships
+    MIGraphX this way, as ``libmigraphx-ep.so`` in the
+    ``onnxruntime-ep-migraphx`` pip package.
+
+    ``provider`` must be ``migraphx``, the only provider with a plugin form.
+    ``path`` is the library file; leave it out to go back to automatic
+    discovery, which looks beside the plugin's ONNX Runtime and in the pip
+    layout next to it. The setting is process-wide and applies only to models
+    loaded after the call. A path set here takes precedence over a MIGraphX
+    provider built into ONNX Runtime. With ``if_unset``, the call does nothing
+    if an earlier call without it has already made a choice.
+
+    The Python wrapper calls this with ``if_unset`` whenever
+    ``onnxruntime_ep_migraphx`` is importable, so a script's own call wins, and
+    only scripts that use the plugin directly, with the library somewhere
+    discovery can't find it, need it. Plugin libraries work on Linux only. Elsewhere, and for a missing file,
+    the call raises an error. So does naming a second library after one has
+    been loaded: ONNX Runtime keeps the first for the life of the process.
+
 Logging
 -------
 

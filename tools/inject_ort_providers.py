@@ -9,11 +9,13 @@ and a repaired GPU wheel ends up carrying the runtime but none of its providers.
 The EP attach then fails and inference silently falls through to the CPU.
 
 This copies the provider libraries into the wheel's bundled-library directory
-and repacks so RECORD checksums stay valid.
+and repacks so RECORD checksums stay valid. A variant whose providers arrive
+as separate pip packages (ROCm 10's MIGraphX plugin) passes none and uses only
+``--gpu-runtime-dirs``.
 
 With ``--gpu-runtime-dirs``, additionally patches loader search-path entries
-pointing at the given site-packages-relative directories (pip's nvidia/* and
-tensorrt_libs) onto the injected provider libraries and every plugin binary —
+pointing at the given site-packages-relative directories (pip's nvidia/*,
+tensorrt_libs and _rocm_sdk_*) onto the injected provider libraries and every plugin binary —
 ``vsanalog.so`` and any CPU-optimized variant beside it — so their link-time
 vendor-runtime dependencies resolve from pip packages even in flows where no
 preload ran. Each file keeps the dynamic tag it already has:
@@ -22,7 +24,7 @@ cannot shadow the vendored ONNX Runtime), and flipping it to DT_RUNPATH would
 silently change that; a file with no tag gets DT_RUNPATH, which ranks below
 LD_LIBRARY_PATH and so cannot override a system runtime the user selected.
 
-    python tools/inject_ort_providers.py <wheel> <lib> [<lib> ...] \
+    python tools/inject_ort_providers.py <wheel> [<lib> ...] \
         [--gpu-runtime-dirs nvidia/cu13/lib:tensorrt_libs]
 """
 
@@ -91,7 +93,7 @@ def main(argv: list[str]) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("wheel", type=Path)
-    parser.add_argument("libs", nargs="+", type=Path)
+    parser.add_argument("libs", nargs="*", type=Path)
     parser.add_argument(
         "--gpu-runtime-dirs",
         help="colon-separated site-packages-relative directories to add as "
@@ -99,6 +101,9 @@ def main(argv: list[str]) -> int:
         "plugin binary (Linux GPU wheels only)",
     )
     args = parser.parse_args(argv[1:])
+
+    if not args.libs and not args.gpu_runtime_dirs:
+        parser.error("nothing to do: pass provider libraries, --gpu-runtime-dirs, or both")
 
     wheel = args.wheel.resolve()
     libs = [lib.resolve() for lib in args.libs]
@@ -162,7 +167,7 @@ def main(argv: list[str]) -> int:
             check=True,
         )
 
-    injected = ", ".join(lib.name for lib in libs)
+    injected = ", ".join(lib.name for lib in libs) or "no provider libraries"
     note = f" (+ RUNPATH entries for {':'.join(runtime_dirs)})" if runtime_dirs else ""
     print(f"injected {injected} into {wheel.name}{note}")
     return 0

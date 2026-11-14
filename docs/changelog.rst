@@ -3,10 +3,41 @@ Changelog
 .. Label every version heading (``.. _vX.Y.Z:``): headings of bare digits get
    no id of their own, only a positional ``idN`` that shifts each release.
 
-.. _v0.4.1:
+.. _v0.5.0:
 
-0.4.1 (Not Yet Released)
-------------------------
+0.5.0
+-----
+- Added a Linux MIGraphX wheel for ROCm 10, on a new ``rocm10`` channel of the
+  package index. It needs no system ROCm. Vega cards such as the Radeon VII
+  stay on the ``rocm7`` wheel. See :doc:`installation`.
+- Added ``core.analog.set_onnx_provider_library`` to name an ONNX Runtime
+  plugin library for a provider. The Python wrapper passes the
+  ``onnxruntime-ep-migraphx`` package's library on its own.
+- Fixed nnTransform3D crashing the process with MIGraphX on the ``rocm7``
+  wheel on GPUs other than the Radeon VII and other gfx906 cards.
+- A GPU that can't run libchromadec's HIP kernels now falls back to the CPU
+  with a warning instead of crashing.
+- Fixed wrong ldzeug2 output with MIGraphX on the ``rocm7`` wheel. It now
+  bundles ONNX Runtime 1.27.1 built from Microsoft's source instead of AMD's
+  build, whose MIGraphX provider returned zeros when using a model cache.
+- The GPU wheels now log a warning when a vendor library they would load from
+  pip is already loaded from somewhere else, such as a system ROCm 7 install
+  under a ROCm 10 wheel.
+- Updated libchromadec to 0.2.1.
+
+  - nnTransform3D output changes on every frame: it had been losing one of the
+    two tile passes each frame needs. The first frame after a seek now costs
+    two passes. Tiles are also anchored to the picture, so a crop only trims
+    the output.
+  - Dropout correction now covers the look-behind and look-ahead frames too,
+    which changes 3D decoder output when correction is on.
+  - On subcarrier-locked PAL, dropouts and extra sources now line up on the
+    second field, and ``AnalogDropoutSpans``, ``dropout_spans`` and
+    ``create_dropouts_mask`` positions move by 2 samples to match.
+  - ``reverse_fields`` no longer leaks between decoders of the same source or
+    skips the Y/C chroma plane and extra sources.
+  - Fixed crashes in FFTW's planner when decoders run concurrently.
+
 - Fixed ``dropout_chroma_extra_sources`` adding its files to the luma plane's
   dropout replacement candidates, which could copy chroma samples into luma or
   fail with a misleading metadata error. Each file now corrects the chroma plane

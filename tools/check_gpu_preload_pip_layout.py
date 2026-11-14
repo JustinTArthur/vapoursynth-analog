@@ -7,8 +7,10 @@ level below their Linux ones, in ``nvidia/cu13/bin/x86_64`` — and a stale
 directory sends every lookup to the "already on the system" fallback, which
 succeeds on a machine with a toolkit installed and fails on a user's.
 
-Run in an environment where the wheel is installed through one of its vendor
-extras (``pip install "vsanalog[cuda] @ file://..."``):
+Run in an environment where the wheel is installed with its pip vendor
+runtime: through one of the CUDA wheels' extras
+(``pip install "vsanalog[cuda] @ file://..."``), or with the ROCm 10 wheel's
+own dependencies.
 
     python tools/check_gpu_preload_pip_layout.py
 
@@ -23,7 +25,7 @@ import sys
 from pathlib import Path
 
 # Where the vendor packages unpack, relative to a site-packages root.
-VENDOR_ROOTS = ("nvidia", "tensorrt_libs")
+VENDOR_ROOTS = ("nvidia", "tensorrt_libs", "_rocm_sdk_core", "_rocm_sdk_libraries")
 
 
 def pip_copies(roots: list[Path]) -> dict[str, Path]:
@@ -58,7 +60,7 @@ def main() -> None:
         sys.exit(
             "no vendor packages found under "
             + ", ".join(f"{r}/{v}" for r in roots for v in VENDOR_ROOTS)
-            + ": install the wheel through its [cuda]/[tensorrt] extra first."
+            + ": install the wheel with its pip vendor runtime first."
         )
 
     problems = []

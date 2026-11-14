@@ -10,7 +10,7 @@ unified tree for variant-aware installers (PEP 817)::
     <site>/projects.toml                   per-project settings (see below)
     <site>/cu13/index.html                 channel root: every project with a
     <site>/cu13/<project>/index.html       cu13 build: …-0cuda13-…whl
-    <site>/cu12/…, <site>/rocm7/…
+    <site>/cu12/…, <site>/rocm7/…, <site>/rocm10/…
     <site>/simple/<project>/index.html     variant-labelled wheels
                                            (…-manylinux_2_28_x86_64-cuda13.whl)
                                            + <project>-<ver>-variants.json, and
@@ -62,6 +62,7 @@ CHANNEL_BY_VARIANT = {
     "cuda12": "cu12",
     "cuda13": "cu13",
     "migraphx": "rocm7",
+    "migraphx10": "rocm10",
 }
 UNIFIED_DIR = "simple"
 PROJECTS_FILE = "projects.toml"

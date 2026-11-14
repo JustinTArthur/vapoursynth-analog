@@ -11,7 +11,10 @@
 #include "chdlog.h"
 #include "modernizechromaticity.h"
 
+#include <chromadec/chromadec.h>
+
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
@@ -449,6 +452,42 @@ static void VS_CC SetLogLevel(const VSMap *In, VSMap *Out, void *, VSCore *, con
     }
 }
 
+// Set once a script names its own library or asks for automatic discovery.
+static std::atomic<bool> OnnxProviderLibraryChosen{false};
+
+static void VS_CC SetOnnxProviderLibrary(const VSMap *In, VSMap *Out, void *, VSCore *,
+                                         const VSAPI *vsapi) {
+    int err;
+    const char *rawProvider = vsapi->mapGetData(In, "provider", 0, &err);
+    std::string provider(err || !rawProvider ? "" : rawProvider);
+    std::transform(provider.begin(), provider.end(), provider.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const char *path = vsapi->mapGetData(In, "path", 0, &err);
+    if (err) path = nullptr;
+    const bool ifUnset = vsapi->mapGetInt(In, "if_unset", 0, &err) != 0;
+
+    // MIGraphX is the only provider ONNX Runtime can take as a plugin library.
+    if (provider != "migraphx") {
+        vsapi->mapSetError(
+            Out, ("set_onnx_provider_library: provider '" + provider +
+                  "' has no plugin library form; only migraphx does").c_str());
+        return;
+    }
+
+    if (ifUnset && OnnxProviderLibraryChosen) return;
+
+    chd_clear_last_error();
+    const chd_status_t s = chd_nn_backend_set_library_path(CHD_NN_ORT_MIGRAPHX, path);
+    if (s != CHD_OK) {
+        const char *detail = chd_last_error();
+        vsapi->mapSetError(
+            Out, ("set_onnx_provider_library: " +
+                  std::string(detail && *detail ? detail : chd_status_str(s))).c_str());
+        return;
+    }
+    if (!ifUnset) OnnxProviderLibraryChosen = true;
+}
+
 static void VS_CC Create4fscSource(const VSMap *In, VSMap *Out, void *, VSCore *Core, const VSAPI *vsapi) {
     int err;
 
@@ -726,6 +765,17 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
         "level:data;",
         "",
         SetLogLevel,
+        nullptr,
+        plugin
+    );
+
+    vspapi->registerFunction(
+        "set_onnx_provider_library",
+        "provider:data;"
+        "path:data:opt;"
+        "if_unset:int:opt;",
+        "",
+        SetOnnxProviderLibrary,
         nullptr,
         plugin
     );

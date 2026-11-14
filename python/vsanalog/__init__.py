@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import warnings
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version as _get_version
 from pathlib import Path
@@ -112,6 +113,39 @@ _NN_PROVIDERS = frozenset({
 _FP16_NATIVE_ONLY_PROVIDERS = frozenset({"cuda", "gpu", "directml"})
 
 _NN_PRECISIONS = {"fp32", "fp16"}
+
+_plugin_eps_configured = False
+
+
+def _configure_plugin_eps() -> None:
+    """Point the plugin at a pip-installed MIGraphX plugin execution provider.
+
+    ROCm 10 ships ONNX Runtime's MIGraphX support as a separate plugin library
+    in the ``onnxruntime_ep_migraphx`` package. Naming it explicitly covers
+    site-packages layouts the plugin's own discovery would miss. The setting
+    is process wide and reaches only models loaded afterwards, so this runs
+    once, ahead of the first neural-network decoder.
+    """
+    global _plugin_eps_configured
+    if _plugin_eps_configured:
+        return
+    _plugin_eps_configured = True
+    try:
+        import onnxruntime_ep_migraphx
+        path = onnxruntime_ep_migraphx.get_library_path()
+    except (ImportError, OSError):
+        return
+    try:
+        vs.core.analog.set_onnx_provider_library(provider="migraphx", path=path, if_unset=True)
+    except AttributeError:
+        pass  # a plugin binary older than this wrapper
+    except vs.Error as e:
+        warnings.warn(
+            f"the MIGraphX plugin execution provider at {path} could not be "
+            f"used: {e}",
+            RuntimeWarning,
+            stacklevel=4,  # past decode_4fsc_video and requires_plugin
+        )
 
 
 @requires_plugin
@@ -302,6 +336,7 @@ def decode_4fsc_video(
 
     if is_nn_decoder:
         assert decoder_lower is not None
+        _configure_plugin_eps()
         provider = None
         if onnx_provider is not None:
             provider = onnx_provider.strip().lower()

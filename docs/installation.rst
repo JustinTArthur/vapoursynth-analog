@@ -48,6 +48,13 @@ wheel over the PyPI one for the same version:
     # MIGraphX on ROCm 7.x
     pip install vsanalog --extra-index-url https://py.justinarthur.com/rocm7/
 
+    # MIGraphX on ROCm 10, which needs AMD's indexes too (see below)
+    pip install "vsanalog[device-gfx1100]" \
+        --extra-index-url https://py.justinarthur.com/rocm10/ \
+        --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ \
+        --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \
+        --extra-index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/
+
 CUDA comes in two builds because the wheel's toolkit major has to match the
 CUDA runtime it finds; take ``cu13`` unless your card is older than Turing
 (GTX 16-series / RTX 20-series), since CUDA 13 dropped support for Maxwell,
@@ -61,8 +68,8 @@ The channel wheels provide the same functions as the PyPI wheel; the extra
 providers are selected with the ``onnx_provider`` argument (or left to
 ``auto``, which on the Nvidia wheels tries TensorRT ahead of CUDA). Each
 wheel is also linked directly from its channel page, and its
-name carries the build tag — ``0cuda12``, ``0cuda13``, ``0migraphx`` — if you
-prefer to fetch by URL.
+name carries the build tag — ``0cuda12``, ``0cuda13``, ``0migraphx``,
+``0migraphx10`` — if you prefer to fetch by URL.
 
 .. warning::
 
@@ -78,7 +85,14 @@ prefer to fetch by URL.
      ``libcufft.so.12`` — cuFFT carries its own version, one behind the
      toolkit's).
    - ``rocm7`` (MIGraphX) wheels need a ROCm 7.x installation
-     (``libamdhip64.so.7``, ``libhipfft.so.0``).
+     (``libamdhip64.so.7``, ``libhipfft.so.0``). ROCm from your Linux
+     distribution's own packages, rather than AMD's repository, may not be able
+     to run SPIR-V. The wheel carries native code for Vega and the RDNA
+     families, but other GPUs, such as Instinct MI100 and newer, need AMD's
+     packages.
+   - ``rocm10`` (MIGraphX) wheels install ROCm 10.1 from AMD's pip packages
+     as a dependency, so only the kernel driver has to come from the system.
+     They need Python 3.11 or newer.
 
    The PyPI wheels have no such requirement — on Windows that includes
    DirectML, which drives inference through ONNX Runtime alone and falls back
@@ -154,6 +168,54 @@ reported on the VapourSynth log, visible through ``core.add_log_handler()``.
    Both caches are per-user and survive across runs, so this is a one-time cost
    per machine and GPU architecture, not per session. Wiping either one, or
    moving to a different GPU generation, pays it again.
+
+MIGraphX on ROCm 10
+~~~~~~~~~~~~~~~~~~~
+ROCm 10 is pip-installable, so the ``rocm10`` wheel needs no system ROCm at
+all. It depends on AMD's ROCm user space (``rocm[libraries]``) and on
+``onnxruntime-ep-migraphx``, which supplies MIGraphX as a plugin that the
+wheel's bundled ONNX Runtime loads. Those packages live on AMD's own indexes
+rather than PyPI, and a wheel can't add an index for you, so the install
+command names them all:
+
+.. code-block:: bash
+
+    pip install "vsanalog[device-gfx1100]" \
+        --extra-index-url https://py.justinarthur.com/rocm10/ \
+        --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ \
+        --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \
+        --extra-index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/
+
+The ``device-gfxNNNN`` extra installs the GPU kernels for your card, which
+rocFFT and MIGraphX can't run without. Replace ``gfx1100`` with your GPU's
+target (``offload-arch``, installed with the ROCm packages, prints it), or use
+``device-all`` for every supported target at a much larger download. The
+wheel also needs:
+
+- Linux on x86-64, Python 3.11 or newer.
+- The ``amdgpu`` kernel driver and access to ``/dev/kfd``, usually through
+  membership of the ``render`` and ``video`` groups. AMD certifies ROCm 10.1
+  against its own packaged driver and the stock kernels of the distributions it
+  supports.
+- An RDNA 3 or RDNA 4 Radeon, or a supported Instinct card. AMD's ROCm 10
+  dropped gfx906, so the Radeon VII and other Vega cards need the ``rocm7``
+  wheel instead.
+
+The ``onnxruntime-ep-migraphx`` package also pulls in PyPI's ``onnxruntime``,
+about 20 MB. It is never loaded: the plugin attaches to the ONNX Runtime the
+vsanalog wheel bundles.
+
+A machine that also has a system ROCm 7 install needs some care, because both
+releases name their HIP runtime ``libamdhip64.so.7`` and a process can load only
+one library by that name. Keep ``/opt/rocm/lib`` out of ``LD_LIBRARY_PATH``,
+and unset ``ROCM_PATH`` and ``HIP_PATH``, which could otherwise point
+MIGraphX's runtime kernel compiler at ROCm 7's tools. If another ROCm copy is
+already loaded when vsanalog resolves its own, the plugin logs a warning naming
+both. During a decode, every ROCm library listed in ``/proc/<pid>/maps``
+should come from the Python environment.
+
+MIGraphX compiles each model for your GPU as it loads, so expect a delay
+before a neural decoder's first frame.
 
 Wheel Variants (PEP 817)
 ~~~~~~~~~~~~~~~~~~~~~~~~

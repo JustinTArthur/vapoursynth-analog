@@ -1,8 +1,8 @@
 """tools/publish_index.py sorts each project's wheels into disjoint index trees.
 
-The channels (cu12/cu13/rocm7) hold only build-tag wheels, one per version
-and platform; simple/ holds variant-labelled wheels, variants.json, and plain
-wheels of projects that are not on PyPI. Mixing them would let a legacy pip
+The channels (cu12/cu13/rocm7/rocm10) hold only build-tag wheels, one per
+version and platform; simple/ holds variant-labelled wheels, variants.json, and
+plain wheels of projects that are not on PyPI. Mixing them would let a legacy pip
 choose a variant by build-tag string order, or shadow a PyPI release.
 """
 
@@ -60,6 +60,7 @@ def test_trees_are_disjoint(tmp_path: Path):
         f"{V}-0cuda12-{WIN}.whl",
         f"{V}-0cuda13-{LINUX}.whl",
         f"{V}-0migraphx-{LINUX}.whl",
+        f"{V}-0migraphx10-{LINUX}.whl",
         f"{V}-{LINUX}-cuda12.whl",
         f"{V}-{LINUX}-cuda13.whl",
         f"{V}-variants.json",
@@ -68,6 +69,7 @@ def test_trees_are_disjoint(tmp_path: Path):
         "cu12/vsanalog": [f"{V}-0cuda12-{LINUX}.whl", f"{V}-0cuda12-{WIN}.whl"],
         "cu13/vsanalog": [f"{V}-0cuda13-{LINUX}.whl"],
         "rocm7/vsanalog": [f"{V}-0migraphx-{LINUX}.whl"],
+        "rocm10/vsanalog": [f"{V}-0migraphx10-{LINUX}.whl"],
         "simple/vsanalog": [f"{V}-{LINUX}-cuda12.whl", f"{V}-{LINUX}-cuda13.whl", f"{V}-variants.json"],
     }
 
@@ -83,7 +85,7 @@ def test_multiple_projects_and_pypi_flag(tmp_path: Path):
     # Every project gets a page in every tree; channel roots list them all.
     arts, _ = pi.collect_site(tmp_path)
     pi.write_site(tmp_path, arts, None)
-    for tree in ("cu12", "cu13", "rocm7", "simple"):
+    for tree in ("cu12", "cu13", "rocm7", "rocm10", "simple"):
         root = (tmp_path / tree / "index.html").read_text()
         assert 'href="vsanalog/"' in root and 'href="other-tool/"' in root
         assert (tmp_path / tree / "other-tool" / "index.html").exists()

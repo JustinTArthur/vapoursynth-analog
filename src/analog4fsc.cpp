@@ -319,8 +319,17 @@ void VSAnalog4fscSource::configure(const std::filesystem::path &sourcePath,
     }
 
     if (isNnDecoder(kind)) {
+        // Everything that sets the input shape. nnTransform3D's batch is its
+        // tile count, which follows from the active window and the source's
+        // horizontal alignment.
+        const chd_video_info_t &info = src->info();
+        const std::string shapeKey =
+            std::to_string(info.field_width) + "x" + std::to_string(info.field_height) +
+            "-s" + std::to_string(firstActiveRowSample) + "-" + std::to_string(lastActiveRowSample) +
+            "-l" + std::to_string(firstActiveFrameLine) + "-" + std::to_string(lastActiveFrameLine) +
+            "-o" + std::to_string(firstActiveRowSample - firstActiveSample);
         src->setNnModel(opts->modelPath, providerToBackend(opts->onnxProvider),
-                        parsePrecision(opts->modelPrecision));
+                        parsePrecision(opts->modelPrecision), shapeKey);
     }
 
     src->commit();

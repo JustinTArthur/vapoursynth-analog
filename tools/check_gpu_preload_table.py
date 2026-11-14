@@ -39,7 +39,7 @@ from pathlib import Path
 VENDOR_PREFIXES = (
     "libcudart", "libcublas", "libcurand", "libcufft", "libnvrtc",
     "libcudnn", "libnvinfer", "libnvonnxparser", "libamdhip", "libhipfft",
-    "libmigraphx",
+    "librocfft", "libmigraphx",
 )
 DRIVER_PREFIXES = ("libcuda.so", "libnvidia-",)
 
@@ -103,8 +103,9 @@ def main() -> int:
     unused = sorted(table_names - demanded)
     print(f"preload table covers all {len(demanded)} linked vendor libraries")
     if unused:
-        # Runtime-dlopened libraries (nvrtc via cuDNN's JIT engines) never
-        # appear in DT_NEEDED, so extras are informational, not errors.
+        # Runtime-dlopened libraries (nvrtc via cuDNN's JIT engines) and
+        # dependencies of dependencies (rocFFT under hipFFT) never appear in
+        # the shipped binaries' DT_NEEDED, so extras are informational.
         print(f"table entries beyond link-time needs (runtime-loaded): {', '.join(unused)}")
 
     checked_families = 0

@@ -157,3 +157,62 @@ def test_fp16_sibling_not_used_at_fp32_precision(tmp_path):
     base.write_bytes(b"")
     (tmp_path / "chroma_net-v2-202605-fp16.onnx").write_bytes(b"")
     assert vsanalog._maybe_fp16_sibling(str(base), "cuda", "fp32") == str(base)
+
+
+class _FakeAnalog:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def set_onnx_provider_library(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+
+
+@pytest.fixture
+def fake_plugin_ep(monkeypatch, tmp_path):
+    """A stand-in onnxruntime_ep_migraphx package and analog namespace."""
+    import sys
+    import types
+
+    library = tmp_path / "libmigraphx-ep.so"
+    library.write_bytes(b"")
+    package = types.ModuleType("onnxruntime_ep_migraphx")
+    package.get_library_path = lambda: str(library)
+    monkeypatch.setitem(sys.modules, "onnxruntime_ep_migraphx", package)
+    monkeypatch.setattr(vsanalog, "_plugin_eps_configured", False)
+
+    def install(error=None):
+        analog = _FakeAnalog(error)
+        fake_vs = types.SimpleNamespace(
+            core=types.SimpleNamespace(analog=analog), Error=vsanalog.vs.Error,
+        )
+        monkeypatch.setattr(vsanalog, "vs", fake_vs)
+        return analog, str(library)
+
+    return install
+
+
+def test_plugin_ep_path_passed_once(fake_plugin_ep):
+    analog, library = fake_plugin_ep()
+    vsanalog._configure_plugin_eps()
+    vsanalog._configure_plugin_eps()
+    assert analog.calls == [{"provider": "migraphx", "path": library, "if_unset": True}]
+
+
+def test_plugin_ep_absent_is_silent(monkeypatch, fake_plugin_ep):
+    import sys
+
+    analog, _ = fake_plugin_ep()
+    # None in sys.modules makes the import raise ImportError.
+    monkeypatch.setitem(sys.modules, "onnxruntime_ep_migraphx", None)
+    vsanalog._configure_plugin_eps()
+    assert analog.calls == []
+
+
+def test_plugin_ep_rejection_warns(fake_plugin_ep):
+    analog, _ = fake_plugin_ep(vsanalog.vs.Error("already registered"))
+    with pytest.warns(RuntimeWarning, match="already registered"):
+        vsanalog._configure_plugin_eps()
+    assert len(analog.calls) == 1

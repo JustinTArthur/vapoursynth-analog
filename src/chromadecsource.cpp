@@ -219,9 +219,31 @@ void ChromaDecSource::setDropout(bool enabled, bool overcorrect, bool intra) {
     }
 }
 
+// ONNX Runtime's built-in MIGraphX provider reuses a cached program across
+// input shapes, so it needs one cache directory per shape. Empty, meaning no
+// cache, when no other provider applies or there is no per-user location.
+static std::string shapedCacheDir(chd_nn_backend_t backend, const std::string &shapeKey) {
+#ifdef VSANALOG_EP_MIGRAPHX
+    const bool migraphx = backend == CHD_NN_ORT_MIGRAPHX || backend == CHD_NN_BACKEND_AUTO;
+#else
+    const bool migraphx = backend == CHD_NN_ORT_MIGRAPHX;
+#endif
+    if (!migraphx) return {};
+    std::string root;
+    if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg) {
+        root = xdg;
+    } else if (const char *home = std::getenv("HOME"); home && *home) {
+        root = std::string(home) + "/.cache";
+    } else {
+        return {};
+    }
+    return root + "/chromadec/migraphx-" + shapeKey;
+}
+
 void ChromaDecSource::setNnModel(const std::string &modelPath,
                                  chd_nn_backend_t backend,
-                                 chd_nn_compute_precision_t precision) {
+                                 chd_nn_compute_precision_t precision,
+                                 const std::string &shapeKey) {
     // The accelerated ONNX Runtime providers dlopen the vendor runtime when
     // the session is created below; resolve pip-installed copies first so
     // that works without LD_LIBRARY_PATH/PATH. CPU and native CoreML load
@@ -246,6 +268,11 @@ void ChromaDecSource::setNnModel(const std::string &modelPath,
     // other backend runs the model at its stored precision. Engines built
     // either way are cached separately, so flipping it can't serve a stale one.
     opts.precision = precision;
+    const std::string cacheDir = shapedCacheDir(backend, shapeKey);
+    if (!cacheDir.empty()) opts.engine_cache_dir = cacheDir.c_str();
+    nnModelPath_ = modelPath;
+    nnOpts_ = opts;
+    nnOpts_.engine_cache_dir = nullptr;
 
     beginChdCall();
     chd_status_t s = chd_nn_model_load_from_file(modelPath.c_str(), &opts, &nn_);
@@ -291,6 +318,31 @@ void ChromaDecSource::setNnModel(const std::string &modelPath,
 void ChromaDecSource::commit() {
     beginChdCall();
     chd_status_t s = chd_decoder_commit(d_);
+    if (s == CHD_E_NN_BACKEND_UNAVAILABLE && nn_) {
+        // The GPU can't run the decoder's kernels. Like a model that won't
+        // load, this falls back to the CPU rather than failing the decode.
+        const std::string reason = chdError("NN backend unavailable", s);
+        chd_nn_session_opts_t cpuOpts = nnOpts_;
+        cpuOpts.backend = CHD_NN_ORT_CPU;
+        chd_nn_model_t *cpuModel = nullptr;
+        beginChdCall();
+        s = chd_nn_model_load_from_file(nnModelPath_.c_str(), &cpuOpts, &cpuModel);
+        if (s != CHD_OK) {
+            throw VSAnalogException(chdError("failed to load NN model", s));
+        }
+        beginChdCall();
+        s = chd_decoder_set_nn_model(d_, cpuModel);
+        if (s != CHD_OK) {
+            const std::string error = chdError("failed to attach NN model", s);
+            chd_nn_model_free(cpuModel);
+            throw VSAnalogException(error);
+        }
+        chd_nn_model_free(nn_);
+        nn_ = cpuModel;
+        chdlog::warn(reason + "; this decode falls back to the CPU, which is far slower.");
+        beginChdCall();
+        s = chd_decoder_commit(d_);
+    }
     if (s != CHD_OK) {
         throw VSAnalogException(chdError("failed to commit decoder", s));
     }

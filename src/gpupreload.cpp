@@ -25,6 +25,9 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#if defined(__linux__)
+#include <link.h>
+#endif
 #endif
 
 namespace {
@@ -72,6 +75,61 @@ bool alreadyResident(const char *name)
 #else
     return dlopen(name, RTLD_LAZY | RTLD_NOLOAD) != nullptr;
 #endif
+}
+
+// Where a resident library was loaded from, or empty when that can't be told.
+std::filesystem::path residentPath(const char *name)
+{
+#if defined(__linux__)
+    void *handle = dlopen(name, RTLD_LAZY | RTLD_NOLOAD);
+    if (handle == nullptr) return {};
+    std::filesystem::path path;
+    struct link_map *map = nullptr;
+    if (dlinfo(handle, RTLD_DI_LINKMAP, &map) == 0 && map != nullptr &&
+        map->l_name != nullptr) {
+        path = map->l_name;
+    }
+    dlclose(handle);
+    return path;
+#else
+    (void)name;
+    return {};
+#endif
+}
+
+// The pip copy of an entry under site-packages, or empty if none is installed.
+std::filesystem::path pipCandidate(const PreloadEntry &entry,
+                                   const std::filesystem::path &site)
+{
+    if (site.empty()) return {};
+    for (const auto &dir : entry.pipDirs) {
+        std::filesystem::path candidate = site;
+        for (const auto &part : std::filesystem::path(dir)) candidate /= part;
+        candidate /= entry.name;
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec)) return candidate;
+    }
+    return {};
+}
+
+// A resident copy always wins, but one from outside the pip packages this
+// wheel was built against can be a different runtime release under the same
+// soname, such as a system ROCm 7 libamdhip64.so.7 under ROCm 10's MIGraphX.
+void warnIfResidentElsewhere(const PreloadEntry &entry,
+                             const std::filesystem::path &site)
+{
+    const std::filesystem::path pip = pipCandidate(entry, site);
+    if (pip.empty()) return;
+    const std::filesystem::path resident = residentPath(entry.name);
+    if (resident.empty()) return;
+    std::error_code ec;
+    if (std::filesystem::equivalent(resident, pip, ec)) return;
+    chdlog::warn(std::string("GPU runtime preload: ") + entry.name +
+                 " was already loaded from " + resident.string() +
+                 ", not the pip copy at " + pip.string() +
+                 ". A different runtime release under the same name can fail "
+                 "or misbehave. Set VSANALOG_GPU_RUNTIME=system if that copy "
+                 "is intended.");
 }
 
 // The libraries are pinned for the lifetime of the process, so every
@@ -150,9 +208,8 @@ bool loadByName(const char *name)
 // Path of this plugin library, for anchoring site-packages without any
 // Python involved: the wheel installs the plugin at
 // <site-packages>/vapoursynth/plugins/vsanalog/, so site-packages is four
-// parents up. Outside a wheel install the walk lands somewhere without a
-// nvidia/ or tensorrt_libs/ subdirectory and the pip step naturally finds
-// nothing.
+// parents up. Outside a wheel install the walk lands somewhere without the
+// vendor package directories and the pip step naturally finds nothing.
 std::filesystem::path pluginPath()
 {
 #if defined(_WIN32)
@@ -193,32 +250,23 @@ void loadTable(const std::vector<PreloadEntry> &table,
         if (alreadyResident(entry.name)) {
             chdlog::debug(std::string("GPU runtime preload: ") + entry.name +
                           " already loaded");
+            warnIfResidentElsewhere(entry, site);
             continue;
         }
 
         bool loaded = false;
-        if (!site.empty()) {
-            for (const auto &dir : entry.pipDirs) {
-                std::filesystem::path candidate = site;
-                for (const auto &part : std::filesystem::path(dir)) candidate /= part;
-                candidate /= entry.name;
-                std::error_code ec;
-                if (!std::filesystem::exists(candidate, ec)) continue;
-
-                std::string loadError;
-                if (loadByPath(candidate, &loadError)) {
-                    chdlog::debug("GPU runtime preload: pinned " +
-                                  candidate.string());
-                    addToSearchPath(candidate.parent_path());
-                    loaded = true;
-                } else {
-                    // A present-but-unloadable pip copy is worth saying out
-                    // loud before the fallback hides it.
-                    chdlog::info("GPU runtime preload: " + candidate.string() +
-                                 " exists but failed to load (" + loadError +
-                                 "); trying the system search paths");
-                }
-                break;
+        if (const auto candidate = pipCandidate(entry, site); !candidate.empty()) {
+            std::string loadError;
+            if (loadByPath(candidate, &loadError)) {
+                chdlog::debug("GPU runtime preload: pinned " + candidate.string());
+                addToSearchPath(candidate.parent_path());
+                loaded = true;
+            } else {
+                // A present-but-unloadable pip copy is worth saying out loud
+                // before the fallback hides it.
+                chdlog::info("GPU runtime preload: " + candidate.string() +
+                             " exists but failed to load (" + loadError +
+                             "); trying the system search paths");
             }
         }
 
@@ -258,9 +306,10 @@ void preloadAll()
         chdlog::info(
             "GPU runtime libraries not found: " + missing +
             ". Execution providers that need them will be unavailable and the "
-            "provider chain will fall through. Install the matching nvidia-* "
-            "/ tensorrt pip packages in this environment, or a system runtime "
-            "(then LD_LIBRARY_PATH/PATH resolution applies as before).");
+            "provider chain will fall through. Install the matching vendor "
+            "pip packages (nvidia-*, tensorrt, rocm) in this environment, or a "
+            "system runtime (then LD_LIBRARY_PATH/PATH resolution applies as "
+            "before).");
     }
 }
 

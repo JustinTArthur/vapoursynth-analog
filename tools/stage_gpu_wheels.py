@@ -36,7 +36,7 @@ from pathlib import Path
 
 # PEP 817 properties per build-tag variant. The NVIDIA provider reports the
 # driver's CUDA version; the wheels need a runtime of that major or newer.
-# MIGraphX has no provider yet, so no twin is made for it.
+# MIGraphX (both ROCm variants) has no provider yet, so no twin is made for it.
 VARIANT_PROPERTIES = {
     "cuda12": ["nvidia :: cuda_version_lower_bound :: 12"],
     "cuda13": ["nvidia :: cuda_version_lower_bound :: 13"],

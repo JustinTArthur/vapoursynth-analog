@@ -138,7 +138,17 @@ pip install vsanalog --extra-index-url https://py.justinarthur.com/rocm7/  # MIG
 `vsanalog[tensorrt]` on a CUDA channel pulls in the matching TensorRT and
 CUDA libraries from PyPI as a convenience (`vsanalog[cuda]` for the CUDA
 runtime alone). These would be needed if you didn't already have them
-installed environment-wide. See the
+installed environment-wide.
+
+MIGraphX on ROCm 10 installs ROCm itself from AMD's pip indexes, which the
+command has to name, plus an extra for your GPU's kernels:
+```sh
+pip install "vsanalog[device-gfx1100]" \
+    --extra-index-url https://py.justinarthur.com/rocm10/ \
+    --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ \
+    --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \
+    --extra-index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/
+``` See the
 [installation guide](https://vapoursynth-analog.justinarthur.com/en/latest/installation.html) for details.
 
 ## Implementation Notes

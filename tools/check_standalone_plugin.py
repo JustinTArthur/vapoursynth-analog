@@ -18,7 +18,7 @@ import vapoursynth as vs
 PLUGIN_NAMES = ("vsanalog.so", "vsanalog.dylib", "vsanalog.dll")
 EXPECTED_FUNCTIONS = (
     "amplify_chroma", "create_dropouts_mask", "decode_4fsc_video",
-    "modernize_chromaticity", "set_log_level",
+    "modernize_chromaticity", "set_log_level", "set_onnx_provider_library",
 )
 
 

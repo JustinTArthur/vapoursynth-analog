@@ -38,12 +38,21 @@ concurrency:
 #     explicit cuda/directml provider pin for exactly this reason.
 env:
   ORT_VERSION: "1.28.0"
-  # MIGraphX comes from AMD, not Microsoft, and moves on ROCm's cadence rather
-  # than ORT_VERSION's. onnxruntime-migraphx (not onnxruntime-rocm — that one
-  # carries no MIGraphX EP) is published on ROCm's own manylinux index, built
-  # for the matching ROCm release.
+  # Microsoft publishes no ONNX Runtime with MIGraphX, so CI builds this release
+  # from source against ROCM_VERSION. AMD's onnxruntime-migraphx returns all-zero
+  # outputs whenever a model cache directory is set, and the one on PyPI is a
+  # third-party build that doesn't fit manylinux_2_28.
   ROCM_VERSION: "7.2.4"
-  ORT_MIGRAPHX_VERSION: "1.23.2"
+  ORT_MIGRAPHX_VERSION: "1.27.1"
+  # The ROCm 10 variant takes ROCm, MIGraphX and the MIGraphX plugin EP from
+  # AMD's pip indexes and bundles Microsoft's stock ONNX Runtime, which has to
+  # be the minor onnxruntime-ep-migraphx was built against. Fold
+  # ORT_ROCM10_VERSION into ORT_VERSION once that reaches the same release.
+  ROCM10_VERSION: "10.1.0"
+  ORT_ROCM10_VERSION: "1.29.0"
+  ROCM10_INDEX: https://stable.repo.amd.com/rocm/whl-next/
+  ROCM10_ORT_INDEX: https://stable.repo.amd.com/rocm/onnxruntime/whl-next/
+  ROCM10_MIGRAPHX_INDEX: https://stable.repo.amd.com/rocm/migraphx/whl-next/
   # DirectML-capable ORT comes from the Windows ML lineage: the classic
   # Microsoft.ML.OnnxRuntime.DirectML packages froze at 1.24.4 on every
   # channel, while onnxruntime-windowsml (MIT, on PyPI) keeps shipping current
@@ -353,10 +362,13 @@ jobs:
   # ---------------------------------------------------------------------------
   # Linux GPU variants — package-index only (too large for PyPI).
   #   cuda     -> ORT GPU build (CUDA + TensorRT EPs) + native cuFFT pipeline
-  #   migraphx -> AMD's ORT-MIGraphX build + native hipFFT pipeline
-  # Both link the vendor toolkit for the device-resident pipeline, so both need
+  #   migraphx -> ORT built from source with MIGraphX + native hipFFT pipeline (ROCm 7)
+  #   migraphx10 -> stock ORT + native hipFFT pipeline; MIGraphX arrives as
+  #                 AMD's plugin EP package (ROCm 10, all from pip)
+  # All link the vendor toolkit for the device-resident pipeline, so all need
   # a real toolkit in the container, not just ONNX Runtime. The vendor runtime
-  # is excluded from the wheel and must be present on the user's machine.
+  # is excluded from the wheel: a system install for ROCm 7, pip packages the
+  # wheel requires for ROCm 10, the user's choice of either for CUDA.
   #
   # CUDA ships as two variants because the toolkit major has to match the one
   # ORT's GPU build loads — our cuFFT kernels and ORT must agree on libcudart.
@@ -377,21 +389,31 @@ jobs:
             cuda_rpm_suffix: "12-8"
             cuda_home: /usr/local/cuda-12.8
             ort_gpu_pkg: gpu_cuda12
+            rocm_runtime: ""
             python: cp314-cp314
           - ep: cuda
             variant: cuda13
             cuda_rpm_suffix: "13-3"
             cuda_home: /usr/local/cuda-13.3
             ort_gpu_pkg: gpu_cuda13
+            rocm_runtime: ""
             python: cp314-cp314
-          # cp312: the onnxruntime-migraphx wheel harvested from AMD's ROCm
-          # repo below exists for cp310 and cp312 only.
           - ep: migraphx
             variant: migraphx
             cuda_rpm_suffix: ""
             cuda_home: ""
             ort_gpu_pkg: ""
-            python: cp312-cp312
+            rocm_runtime: system
+            python: cp314-cp314
+          # onnxruntime-ep-migraphx, which the pip-flow checks install, has
+          # cp311-cp314 builds.
+          - ep: migraphx
+            variant: migraphx10
+            cuda_rpm_suffix: ""
+            cuda_home: ""
+            ort_gpu_pkg: ""
+            rocm_runtime: pip
+            python: cp314-cp314
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -406,9 +428,15 @@ jobs:
           python3 -m venv .venv-fp16
           .venv-fp16/bin/pip install --quiet "onnxruntime<2" "onnx<2"
           .venv-fp16/bin/python tools/convert_models_fp16.py
+      - name: Restore ONNX Runtime built with MIGraphX
+        if: matrix.rocm_runtime == 'system'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ort-migraphx
+          key: ort-migraphx-${{ env.ORT_MIGRAPHX_VERSION }}-rocm${{ env.ROCM_VERSION }}
       - name: Build manylinux GPU wheel (${{ matrix.variant }})
         run: |
-          mkdir -p wheelhouse
+          mkdir -p wheelhouse "${{ runner.temp }}/ort-migraphx"
           docker run --rm \
             -e ORT_VERSION="${ORT_VERSION}" -e EP="${{ matrix.ep }}" \
             -e VARIANT="${{ matrix.variant }}" \
@@ -417,9 +445,14 @@ jobs:
             -e CUDA_HOME_DIR="${{ matrix.cuda_home }}" \
             -e ORT_GPU_PKG="${{ matrix.ort_gpu_pkg }}" \
             -e ROCM_VERSION="${ROCM_VERSION}" -e ORT_MIGRAPHX_VERSION="${ORT_MIGRAPHX_VERSION}" \
+            -e ROCM_RUNTIME="${{ matrix.rocm_runtime }}" \
+            -e ROCM10_VERSION="${ROCM10_VERSION}" -e ORT_ROCM10_VERSION="${ORT_ROCM10_VERSION}" \
+            -e ROCM10_INDEX="${ROCM10_INDEX}" -e ROCM10_ORT_INDEX="${ROCM10_ORT_INDEX}" \
+            -e ROCM10_MIGRAPHX_INDEX="${ROCM10_MIGRAPHX_INDEX}" \
             -e PYTHON_TAG="${{ matrix.python }}" \
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/wheelhouse:/wheelhouse" \
+            -v "${{ runner.temp }}/ort-migraphx:/ort-migraphx" \
             quay.io/pypa/manylinux_2_28_x86_64 \
             bash -exc '
           PYBIN="/opt/python/${PYTHON_TAG}/bin"; export PATH="${PYBIN}:${PATH}"
@@ -439,7 +472,9 @@ jobs:
           # ── Vendor toolkit + ONNX Runtime ────────────────────────────────
           # EXCLUDE_ARGS is what auditwheel must NOT vendor: the vendor runtime
           # the user installs themselves. Without it, a repaired wheel swells by
-          # hundreds of megabytes of CUDA/ROCm libraries.
+          # hundreds of megabytes of CUDA/ROCm libraries. EXTRA_SETUP_ARGS are
+          # Meson options the variant adds to both builds below.
+          EXTRA_SETUP_ARGS=()
           if [ "${EP}" = "cuda" ]; then
             cat > /etc/yum.repos.d/cuda.repo << REPO
           [cuda]
@@ -462,6 +497,38 @@ jobs:
 
             curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_GPU_PKG}-${ORT_VERSION}.tgz" -o /tmp/ort.tgz
             mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
+          elif [ "${ROCM_RUNTIME}" = "pip" ]; then
+            # The toolchain goes in a venv of its own, so the pip-flow checks
+            # further down see only what the wheel requirements install.
+            # rocm-sdk init unpacks the devel tarball into a full ROCm tree
+            # (hipcc, headers, CMake configs) whose libraries link back to the
+            # runtime packages beside it.
+            python3 -m venv /opt/rocm-venv
+            /opt/rocm-venv/bin/pip install --quiet --no-cache-dir \
+              "rocm[libraries,devel]==${ROCM10_VERSION}" --extra-index-url "${ROCM10_INDEX}"
+            /opt/rocm-venv/bin/rocm-sdk init --quiet
+            ROCM_DEVEL="$(/opt/rocm-venv/bin/rocm-sdk path --root)"
+            export ROCM_PATH="${ROCM_DEVEL}"
+            # Meson checks for a CMake package in its default prefixes and this
+            # variable before it ever runs CMake, so rocm_root alone, which
+            # reaches only CMake, finds nothing outside /opt/rocm.
+            export CMAKE_PREFIX_PATH="${ROCM_DEVEL}"
+            # Only hipcc goes on PATH: the tier build below runs a bare clang,
+            # which must stay the distribution one.
+            mkdir -p /opt/rocm-bin && ln -s "${ROCM_DEVEL}/bin/hipcc" /opt/rocm-bin/hipcc
+            export PATH="/opt/rocm-bin:${PATH}"
+            VENDOR_LIB_DIR="${ROCM_DEVEL}/lib"
+            EXTRA_SETUP_ARGS=(-Drocm_runtime=pip "-Dchromadec:rocm_root=${ROCM_DEVEL}")
+            EXCLUDE_ARGS=(--exclude "libamdhip64.so*" --exclude "libhipfft.so*"
+                          --exclude "librocfft*.so*" --exclude "libmigraphx*.so*"
+                          --exclude "libMIOpen.so*" --exclude "libamd_comgr.so*"
+                          --exclude "libhsa-runtime64.so*" --exclude "librocblas.so*"
+                          --exclude "libhsakmt.so*")
+
+            # Stock ONNX Runtime: MIGraphX is not built in, and the plugin EP
+            # needs no MIGraphX headers to attach.
+            curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_ROCM10_VERSION}/onnxruntime-linux-x64-${ORT_ROCM10_VERSION}.tgz" -o /tmp/ort.tgz
+            mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
           else
             cat > /etc/yum.repos.d/rocm.repo << REPO
           [rocm]
@@ -471,9 +538,11 @@ jobs:
           gpgcheck=0
           REPO
             # migraphx-devel carries libmigraphx_c, which the ORT MIGraphX
-            # provider links; hipfft-devel and rocm-hip-runtime-devel cover
+            # provider links, and its CMake package needs the MIOpen, rocBLAS
+            # and hipBLASLt ones; hipfft-devel and rocm-hip-runtime-devel cover
             # hipcc + hipFFT + hip::host for the native pipeline.
-            dnf install -y rocm-hip-runtime-devel hipfft-devel migraphx-devel
+            dnf install -y rocm-hip-runtime-devel hipfft-devel migraphx-devel \
+              miopen-hip-devel rocblas-devel hipblaslt-devel
             export PATH="/opt/rocm/bin:${PATH}"
             VENDOR_LIB_DIR="/opt/rocm/lib"
             EXCLUDE_ARGS=(--exclude "libamdhip64.so*" --exclude "libhipfft.so*"
@@ -482,25 +551,24 @@ jobs:
                           --exclude "libhsa-runtime64.so*" --exclude "librocblas.so*"
                           --exclude "libhsakmt.so*")
 
-            # AMD ships ONNX Runtime as a Python wheel: shared objects under
-            # onnxruntime/capi/ and no headers at all. chromadec resolves
-            # -Donnxruntime_root as <root>/lib + <root>/include, so assemble
-            # one from the same-version Microsoft CPU tarball (headers) and AMD
-            # objects (libraries). The MIGraphX attach goes through the generic
+            # The libraries are built from source once per ORT and ROCm pair.
+            # The headers come from the same-version Microsoft CPU tarball:
+            # the MIGraphX attach goes through the generic
             # AppendExecutionProvider entry point, so no MIGraphX-specific
             # header is involved and the stock headers suffice.
             curl -sSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_MIGRAPHX_VERSION}/onnxruntime-linux-x64-${ORT_MIGRAPHX_VERSION}.tgz" -o /tmp/ort.tgz
             mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1
-            python3 -m pip install --quiet --no-deps --target /tmp/ortwheel \
-              "onnxruntime-migraphx==${ORT_MIGRAPHX_VERSION}" \
-              -f "https://repo.radeon.com/rocm/manylinux/rocm-rel-${ROCM_VERSION}/"
+            if [ ! -e "/ort-migraphx/libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" ]; then
+              git clone --depth 1 --branch "v${ORT_MIGRAPHX_VERSION}" \
+                https://github.com/microsoft/onnxruntime /tmp/ort
+              (cd /tmp/ort && ./build.sh --config Release --parallel 4 \
+                --allow_running_as_root --skip_tests --compile_no_warning_as_error \
+                --build_shared_lib --use_migraphx --migraphx_home /opt/rocm \
+                --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=OFF)
+              cp -a /tmp/ort/build/Linux/Release/libonnxruntime*.so* /ort-migraphx/
+            fi
             rm -f /opt/ort/lib/libonnxruntime*.so*
-            cp -a /tmp/ortwheel/onnxruntime/capi/libonnxruntime*.so* /opt/ort/lib/
-            ln -sf "libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" /opt/ort/lib/libonnxruntime.so
-            # The plugin records the SONAME (libonnxruntime.so.1), which the
-            # wheel ships no file for; auditwheel resolves by that name.
-            soname=$(readelf -d "/opt/ort/lib/libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" | sed -n "s/.*SONAME.*\[\(.*\)\].*/\1/p")
-            ln -sf "libonnxruntime.so.${ORT_MIGRAPHX_VERSION}" "/opt/ort/lib/${soname}"
+            cp -a /ort-migraphx/libonnxruntime*.so* /opt/ort/lib/
           fi
           export LD_LIBRARY_PATH="/opt/ort/lib:${VENDOR_LIB_DIR}:${LD_LIBRARY_PATH}"
 
@@ -511,11 +579,21 @@ jobs:
           # to every compile it runs.
           if [ "${EP}" = "migraphx" ]; then
             export HIPCC_COMPILE_FLAGS_APPEND="-I/tmp/build/subprojects/fftw-3.3.11/api"
+            # AMD SPIR-V leaves the final compile to the HIP runtime, for
+            # whatever GPU it finds. Distribution-built ROCm often cannot run
+            # it, so the ROCm 7 wheel also carries native code. gfx9-generic
+            # does not cover the sramecc gfx906.
+            HIP_TARGETS=amdgcnspirv
+            if [ "${ROCM_RUNTIME}" = "system" ]; then
+              HIP_TARGETS="${HIP_TARGETS},gfx906,gfx9-generic,gfx10-1-generic,gfx10-3-generic,gfx11-generic,gfx12-generic"
+            fi
+            EXTRA_SETUP_ARGS+=("-Dchromadec:rocm_offload_targets=${HIP_TARGETS}")
           fi
           python3 -m build --wheel --no-isolation -o /tmp/dist/ \
             -Csetup-args="-Dep=${EP}" \
             -Csetup-args="-Dprefer_static=true" \
-            -Csetup-args="-Dchromadec:onnxruntime_root=/opt/ort"
+            -Csetup-args="-Dchromadec:onnxruntime_root=/opt/ort" \
+            "${EXTRA_SETUP_ARGS[@]/#/-Csetup-args=}"
 
           # An x86-64-v3 variant, which VapourSynth loads only on CPUs that
           # report the matching ABI level. Same mixed-compiler split as the CPU
@@ -525,7 +603,8 @@ jobs:
           # -ccbin only when cuda_ccbindir is set, which it is not.
           CC=clang CXX=clang++ meson setup /tmp/bv3 -Dbuild_wheel=false \
             -Dep=${EP} -Dprefer_static=true -Dchromadec:onnxruntime_root=/opt/ort \
-            -Dcpp_args=-march=x86-64-v3 -Dc_args=-march=x86-64-v3
+            -Dcpp_args=-march=x86-64-v3 -Dc_args=-march=x86-64-v3 \
+            "${EXTRA_SETUP_ARGS[@]}"
           meson compile -C /tmp/bv3
           # Before auditwheel: it renames the vendored libraries and patches the
           # importing binaries, so a variant added after would still reference
@@ -552,19 +631,27 @@ jobs:
           # preload ran (RUNPATH ranks below LD_LIBRARY_PATH, so a system
           # runtime keeps winning in that flow). Union of the cu12 and cu13
           # pip layouts; the loader skips directories that do not exist.
+          # The ROCm 10 wheel has no provider to inject (MIGraphX is a pip
+          # dependency) but gets the same entries for the _rocm_sdk_* packages
+          # its hipFFT pipeline links.
           GPU_DIRS_ARGS=()
+          PROVIDER_LIBS=(/opt/ort/lib/libonnxruntime_providers_*.so)
           if [ "${EP}" = "cuda" ]; then
             GPU_DIRS_ARGS=(--gpu-runtime-dirs "nvidia/cu13/lib:nvidia/cuda_runtime/lib:nvidia/cuda_nvrtc/lib:nvidia/cublas/lib:nvidia/cufft/lib:nvidia/curand/lib:nvidia/cudnn/lib:tensorrt_libs")
+          elif [ "${ROCM_RUNTIME}" = "pip" ]; then
+            GPU_DIRS_ARGS=(--gpu-runtime-dirs "_rocm_sdk_core/lib:_rocm_sdk_libraries/lib")
+            PROVIDER_LIBS=()
           fi
           for w in /wheelhouse/*.whl; do
-            python3 tools/inject_ort_providers.py "$w" /opt/ort/lib/libonnxruntime_providers_*.so "${GPU_DIRS_ARGS[@]}"
+            python3 tools/inject_ort_providers.py "$w" "${PROVIDER_LIBS[@]}" "${GPU_DIRS_ARGS[@]}"
           done
 
-          # Declare the pip vendor-runtime sets as [cuda]/[tensorrt] extras.
-          # The requirement sets live in tools/add_variant_extras.py, keyed by
-          # variant; meson-python cannot vary Requires-Dist per build, so they
-          # are stamped into the finished wheel.
-          if [ "${EP}" = "cuda" ]; then
+          # Declare the pip vendor runtime: [cuda]/[tensorrt] extras for CUDA,
+          # requirements plus [device-gfxNNNN] extras for ROCm 10. The sets
+          # live in tools/add_variant_extras.py, keyed by variant; meson-python
+          # cannot vary Requires-Dist per build, so they are stamped into the
+          # finished wheel.
+          if [ "${EP}" = "cuda" ] || [ "${ROCM_RUNTIME}" = "pip" ]; then
             python3 tools/add_variant_extras.py /wheelhouse/*.whl --variant "${VARIANT}"
           fi
 
@@ -574,7 +661,11 @@ jobs:
           # rather than a wheel that silently runs the baseline everywhere.
           export VSANALOG_EXPECT_CPU_TIERS=avx2
           python3 -m pip install --quiet "vapoursynth==${VAPOURSYNTH_VERSION}" pytest
-          python3 -m pip install --quiet /wheelhouse/*.whl
+          # The ROCm 10 requirements live on AMD indexes; the pip-flow checks
+          # below install them.
+          NO_DEPS=()
+          if [ "${ROCM_RUNTIME}" = "pip" ]; then NO_DEPS=(--no-deps); fi
+          python3 -m pip install --quiet "${NO_DEPS[@]}" /wheelhouse/*.whl
           python3 tools/check_wheel_plugin.py
           # The colorimetry tests are synthetic CPU color math, so they run
           # with no GPU — and through whichever CPU variant the probe picked,
@@ -582,7 +673,8 @@ jobs:
           # assert rather than skip because a wheel is installed; the smoke test
           # covers the PyPI wheels this way but never sees a GPU one.
           VSANALOG_CHECK_WHEEL_LAYOUT=1 python3 -m pytest -v \
-            tests/test_autoload.py tests/test_colorimetry.py tests/test_wheel_layout.py
+            tests/test_autoload.py tests/test_colorimetry.py tests/test_wheel_layout.py \
+            tests/test_plugin_ep.py
 
           # Pip-flow load checks: with LD_LIBRARY_PATH gone, the plugin
           # link-time CUDA deps must resolve from pip nvidia wheels — once
@@ -609,6 +701,30 @@ jobs:
             env -u LD_LIBRARY_PATH python3 tools/check_wheel_plugin.py
             env -u LD_LIBRARY_PATH VSANALOG_GPU_RUNTIME=off python3 tools/check_wheel_plugin.py
             env -u LD_LIBRARY_PATH python3 -m pytest -v tests/test_autoload.py tests/test_colorimetry.py
+          fi
+
+          # The same for ROCm 10, with the runtime and the MIGraphX plugin EP
+          # installed through the wheel requirements from the AMD indexes.
+          # The build toolchain goes first, both to free its ~4 GB and so no
+          # check can resolve a library from it.
+          if [ "${ROCM_RUNTIME}" = "pip" ]; then
+            rm -rf /opt/rocm-venv
+            w=$(ls /wheelhouse/*.whl)
+            python3 -m pip install --quiet --no-cache-dir "vsanalog @ file://${w}" \
+              --extra-index-url "${ROCM10_INDEX}" --extra-index-url "${ROCM10_ORT_INDEX}" \
+              --extra-index-url "${ROCM10_MIGRAPHX_INDEX}"
+
+            python3 tools/check_gpu_preload_table.py
+            env -u LD_LIBRARY_PATH python3 tools/check_gpu_preload_pip_layout.py
+            # The plugin EP resolves libmigraphx_c and the HIP runtime through
+            # its own RUNPATH into the pip packages. Loading it initializes no
+            # device, so a broken chain fails here rather than on a GPU.
+            env -u LD_LIBRARY_PATH python3 -c "import ctypes, onnxruntime_ep_migraphx as ep; ctypes.CDLL(ep.get_library_path())"
+            env -u LD_LIBRARY_PATH python3 tools/check_wheel_plugin.py
+            env -u LD_LIBRARY_PATH VSANALOG_GPU_RUNTIME=off python3 tools/check_wheel_plugin.py
+            env -u LD_LIBRARY_PATH VSANALOG_CHECK_WHEEL_LAYOUT=1 python3 -m pytest -v \
+              tests/test_autoload.py tests/test_colorimetry.py tests/test_wheel_layout.py \
+              tests/test_plugin_ep.py
           fi
           '
       - uses: actions/upload-artifact@v6
@@ -1178,6 +1294,7 @@ jobs:
   #   https://py.justinarthur.com/cu13/   0cuda13 wheels     } legacy pip picks
   #   https://py.justinarthur.com/cu12/   0cuda12 wheels     } these over PyPI's
   #   https://py.justinarthur.com/rocm7/  0migraphx wheels   } by build tag
+  #   https://py.justinarthur.com/rocm10/ 0migraphx10 wheels }
   #   https://py.justinarthur.com/simple/ PEP 817 variant-labelled twins +
   #                                       variants.json, for variant-aware installers
   # Separate from the release job so a provisioning failure on one variant
@@ -1210,7 +1327,7 @@ jobs:
       - uses: actions/download-artifact@v6
         continue-on-error: true
         with:
-          pattern: vsanalog-wheel-*-{cuda12,cuda13,migraphx}
+          pattern: vsanalog-wheel-*-{cuda12,cuda13,migraphx,migraphx10}
           path: gpu-wheels
           merge-multiple: true
 
@@ -1259,13 +1376,13 @@ jobs:
           aws s3 sync "s3://${PY_INDEX_BUCKET}/files/" site/files/ --no-progress \
             --exclude '*' --include '*.sha256' --include '*.metadata'
           python tools/publish_index.py site --files-url "${PY_INDEX_URL}/files"
-          for tree in cu12 cu13 rocm7 simple; do
+          for tree in cu12 cu13 rocm7 rocm10 simple; do
             aws s3 sync "site/${tree}/" "s3://${PY_INDEX_BUCKET}/${tree}/" --no-progress \
               --content-type 'text/html; charset=utf-8'
           done
           aws cloudfront create-invalidation --distribution-id "${PY_INDEX_DISTRIBUTION}" \
-            --paths '/cu12/*' '/cu13/*' '/rocm7/*' '/simple/*' --query 'Invalidation.Id' --output text
-          echo "Published to ${PY_INDEX_URL}/{cu12,cu13,rocm7,simple}/vsanalog/"
+            --paths '/cu12/*' '/cu13/*' '/rocm7/*' '/rocm10/*' '/simple/*' --query 'Invalidation.Id' --output text
+          echo "Published to ${PY_INDEX_URL}/{cu12,cu13,rocm7,rocm10,simple}/vsanalog/"
 
   # ---------------------------------------------------------------------------
   # PyPI — lean wheels only (macOS CoreML, Linux CPU, Windows with the
@@ -1285,7 +1402,7 @@ jobs:
           name: vsanalog-sdist
           path: dist/
       # Explicit lean-wheel names only: GPU-variant artifacts (…-0cuda12 /
-      # …-0cuda13 / …-0migraphx) exist on the same tag run but must NOT be
+      # …-0cuda13 / …-0migraphx / …-0migraphx10) exist on the same tag run but must NOT be
       # published to PyPI.
       - uses: actions/download-artifact@v6
         with:

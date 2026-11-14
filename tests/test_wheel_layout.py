@@ -70,6 +70,23 @@ def test_bundled_models_present():
             assert path.exists(), f"{decoder} {version}: missing {path}"
 
 
+def test_rocm10_plugin_ep_discoverable():
+    """The MIGraphX plugin EP sits where libchromadec looks for it: in
+    ../onnxruntime_ep_migraphx/ relative to the bundled ONNX Runtime, which is
+    what serves an autoloaded plugin with vsanalog never imported."""
+    try:
+        import _vsanalog_gpu_preload as preload
+    except ImportError:
+        pytest.skip("not a GPU wheel")
+    if preload._GPU_RUNTIME != "rocm10":
+        pytest.skip("not the ROCm 10 wheel")
+    libs = _site() / "vsanalog.libs"
+    assert sorted(libs.glob("libonnxruntime*.so*")), f"no bundled ONNX Runtime in {libs}"
+    ep = pytest.importorskip("onnxruntime_ep_migraphx")
+    expected = libs.parent / "onnxruntime_ep_migraphx" / "libmigraphx-ep.so"
+    assert Path(ep.get_library_path()).resolve() == expected.resolve()
+
+
 def test_windows_deps_colocated():
     if platform.system() != "Windows":
         pytest.skip("Windows-only layout check")

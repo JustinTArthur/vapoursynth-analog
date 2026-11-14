@@ -326,12 +326,37 @@ and hipFFT pipelines, so they need the vendor toolkit at build time — nvcc plu
 cuFFT, or hipcc plus hipFFT — not just an ONNX Runtime. ``-Dep=directml`` needs
 neither, since DirectML inference goes through ONNX Runtime alone.
 
-ONNX Runtime with the MIGraphX provider comes from AMD rather than Microsoft:
-the ``onnxruntime-migraphx`` wheel on ROCm's own package index (not
-``onnxruntime-rocm``, which carries no MIGraphX provider). It ships shared
-objects under ``onnxruntime/capi/`` and no headers, so
-``-Dchromadec:onnxruntime_root`` needs a root assembled from those objects and
-the headers of Microsoft's matching release.
+Microsoft publishes no ONNX Runtime with the MIGraphX provider, so build it
+from source against the ROCm in use, with ``build.sh --build_shared_lib
+--use_migraphx --migraphx_home /opt/rocm``. Avoid the ``onnxruntime-migraphx``
+wheel on ROCm's own package index, which returns all-zero outputs when a model
+cache directory is set. ``-Dchromadec:onnxruntime_root`` needs a root assembled
+from the built libraries and the headers of Microsoft's matching release.
+
+That is the ROCm 7 build. ROCm 10 ships MIGraphX as a plugin that a stock
+ONNX Runtime loads at run time, and ROCm itself as pip packages, so its build
+adds ``-Drocm_runtime=pip`` and takes everything else off the shelf:
+
+- ONNX Runtime is Microsoft's release archive, at the minor version
+  ``onnxruntime-ep-migraphx`` requires (1.29 for its 1.0.0 release).
+- The toolchain is ``rocm[libraries,devel]`` from
+  ``https://stable.repo.amd.com/rocm/whl-next/``, installed into a venv of its
+  own. ``rocm-sdk init`` unpacks the development tree, and
+  ``-Dchromadec:rocm_root=$(rocm-sdk path --root)`` points libchromadec's
+  hipFFT pipeline at it, with that tree's ``bin/hipcc`` on ``PATH``.
+
+Either ROCm build compiles libchromadec's HIP pipeline kernels for the targets
+in ``-Dchromadec:rocm_offload_targets``. The default, ``auto``, builds AMD's
+SPIR-V, which the HIP runtime compiles at load time for whatever GPU it finds,
+plus native code for each GPU on the build machine. The published ``rocm10``
+wheel uses SPIR-V alone. ROCm built by a Linux distribution often can't run
+SPIR-V, so the ``rocm7`` wheel also carries native code for ``gfx906`` and the
+``gfx9``, ``gfx10-1``, ``gfx10-3``, ``gfx11`` and ``gfx12`` generic targets.
+
+``-Drocm_runtime=pip`` compiles in the table the plugin uses to load ROCm
+from the ``_rocm_sdk_core`` and ``_rocm_sdk_libraries`` packages, and makes
+the wheel install the start-up module that does the same before VapourSynth
+loads the plugin.
 
 Versioning
 ----------

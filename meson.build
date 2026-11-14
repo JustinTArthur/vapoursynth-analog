@@ -64,21 +64,21 @@ chromadec_opts = [
 ]
 if is_darwin
     chromadec_opts += [
-        'with_onnxruntime=false',
+        'with_onnxruntime=disabled',
         'with_coreml=enabled',
         'with_cuda=disabled',
         'with_rocm=disabled',
     ]
 elif ep == 'none'
     chromadec_opts += [
-        'with_onnxruntime=false',
+        'with_onnxruntime=disabled',
         'with_coreml=disabled',
         'with_cuda=disabled',
         'with_rocm=disabled',
     ]
 else
     chromadec_opts += [
-        'with_onnxruntime=true',
+        'with_onnxruntime=enabled',
         'with_coreml=disabled',
         'with_cuda=' + (ep == 'cuda' ? 'enabled' : 'disabled'),
         'with_rocm=' + (ep == 'migraphx' ? 'enabled' : 'disabled'),
@@ -91,8 +91,8 @@ chromadec_dep = dependency('chromadec', default_options: chromadec_opts)
 # GPU vendor-runtime preload table
 # =====================
 
-# The GPU wheels exclude the vendor runtime (CUDA, cuDNN, TensorRT) and expect
-# the user to supply it; src/gpupreload.cpp and the wheel's
+# The GPU wheels exclude the vendor runtime (CUDA, cuDNN, TensorRT, ROCm) and
+# expect the user to supply it; src/gpupreload.cpp and the wheel's
 # _vsanalog_gpu_preload.py resolve pip-installed copies at load time. Both
 # read the same table built here: each entry is the platform library name with
 # its major baked in (the bundled ONNX Runtime pins the majors) and the
@@ -102,9 +102,20 @@ chromadec_dep = dependency('chromadec', default_options: chromadec_opts)
 # consolidates under nvidia/cu13/, hence the per-major dir lists; TensorRT
 # ships in tensorrt_libs on both. The cu13 wheels are multi-arch on Windows
 # and put the DLLs one level down in bin/x86_64, unlike their Linux lib/.
+#
+# ROCm 10's pip wheels put the HIP runtime in _rocm_sdk_core and hipFFT/rocFFT
+# in _rocm_sdk_libraries. A system ROCm (rocm_runtime=system) gets no table:
+# the user's install resolves through the normal loader paths.
 gpu_runtime_name = 'none'
 gpu_preload_entries = []
-if ep == 'cuda' and not is_darwin
+if ep == 'migraphx' and get_option('rocm_runtime') == 'pip' and not is_darwin
+    gpu_runtime_name = 'rocm10'
+    gpu_preload_entries = [
+        ['libamdhip64.so.7', ['_rocm_sdk_core/lib']],
+        ['librocfft.so.0',   ['_rocm_sdk_libraries/lib']],
+        ['libhipfft.so.0',   ['_rocm_sdk_libraries/lib']],
+    ]
+elif ep == 'cuda' and not is_darwin
     cuda_dep = dependency('cuda', version: '>=12')
     cuda_major = cuda_dep.version().split('.')[0]
     gpu_runtime_name = 'cuda' + cuda_major
@@ -357,7 +368,7 @@ shared_library(
     install: true,
     install_dir: plugin_install_dir,
     name_prefix: '',  # Don't add 'lib' prefix on Unix
-    cpp_args: ['-D_USE_MATH_DEFINES'],
+    cpp_args: ['-D_USE_MATH_DEFINES'] + (ep == 'migraphx' ? ['-DVSANALOG_EP_MIGRAPHX'] : []),
     link_args: vsanalog_link_args,
     link_depends: vsanalog_symbol_file,
     gnu_symbol_visibility: 'hidden',

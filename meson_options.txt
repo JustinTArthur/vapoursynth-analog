@@ -14,3 +14,14 @@ option('ep',
     value: 'cpu',
     description: 'Neural-network execution provider for the bundled libchromadec.',
 )
+
+# Where the migraphx variant's ROCm user space comes from at run time: a
+# system install (ROCm 7.x, AMD's ONNX Runtime with MIGraphX built in) or
+# AMD's pip wheels (ROCm 10, MIGraphX as an ONNX Runtime plugin EP). 'pip'
+# adds the vendor-runtime preload table for the _rocm_sdk_* packages.
+option('rocm_runtime',
+    type: 'combo',
+    choices: ['system', 'pip'],
+    value: 'system',
+    description: 'ROCm user space the migraphx variant resolves at run time.',
+)
