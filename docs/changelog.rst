@@ -23,6 +23,8 @@ Changelog
 - The GPU wheels now log a warning when a vendor library they would load from
   pip is already loaded from somewhere else, such as a system ROCm 7 install
   under a ROCm 10 wheel.
+- The Apple silicon macOS wheel and plugin now need macOS 15 or later, as the
+  Intel ones already did.
 - Updated libchromadec to 0.2.1.
 
   - nnTransform3D output changes on every frame: it had been losing one of the
